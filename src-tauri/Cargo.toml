@@ -22,20 +22,31 @@ tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-pn
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 time = { version = "0.3.47", features = ["formatting"] }
 dirs = "6"
 log = "0.4"
 libc = "0.2"
-reqwest = { version = "0.13", features = ["blocking", "socks"] }
-rquickjs = { version = "0.12", features = ["bindgen"] }
+# Use native TLS (SChannel on Windows, Secure Transport on macOS) instead of the
+# default rustls+aws-lc-rs stack, which would otherwise require NASM and CMake to
+# build the aws-lc C library on Windows. SChannel is the OS-native TLS provider.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "socks", "native-tls", "http2", "charset"] }
+# QuickJS engine. Upstream enables the `bindgen` feature, which regenerates the
+# C bindings at build time and so requires libclang. To keep the Windows build
+# dependency-light we rely on the crate's pre-generated bindings for the
+# standard targets instead — purely a build-time detail; runtime is identical.
+rquickjs = { version = "0.12", features = [] }
+# Embedded SQLite. Replaces the macOS `sqlite3` CLI shell-out so provider
+# plugins that read SQLite databases (Cursor, Kiro, Antigravity, ...) work on
+# every platform with no external binary. `bundled` compiles SQLite from source.
+rusqlite = { version = "0.32", features = ["bundled"] }
 tauri-plugin-store = "2.4.3"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-log = "2"
-tauri-plugin-aptabase = { git = "https://github.com/aptabase/tauri-plugin-aptabase", rev = "e896cceb" }
 tauri-plugin-clipboard-manager = "2.3.2"
-tauri-plugin-updater = "2"
+# native-tls (not the default rustls) to match reqwest above and avoid aws-lc-sys.
+# `zip` is kept (default) so Windows updater archives still extract.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "zip"] }
 tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2.5.1"
@@ -44,7 +55,11 @@ regex-lite = "0.1.9"
 aes-gcm = "0.10.3"
 sha2 = "0.11"
 
+# macOS-only. The menu-bar panel uses tauri-nspanel (an NSPanel wrapper); on
+# Windows/Linux the panel is a regular always-on-top borderless WebviewWindow
+# instead (see src/panel.rs). objc2* back the App Nap / WebKit tweaks.
 [target.'cfg(target_os = "macos")'.dependencies]
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSProcessInfo", "NSString"] }
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSGraphics"] }

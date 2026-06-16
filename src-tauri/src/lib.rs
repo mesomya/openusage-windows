@@ -16,7 +16,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 use tauri::Emitter;
-use tauri_plugin_aptabase::EventTracker;
 use tauri_plugin_log::{Target, TargetKind};
 use uuid::Uuid;
 
@@ -24,8 +23,10 @@ use uuid::Uuid;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const GLOBAL_SHORTCUT_STORE_KEY: &str = "globalShortcut";
+// Records the last day the app ran. Upstream also sent an anonymous "app_started"
+// analytics event here; this Windows fork removes that third-party telemetry, so
+// the marker is now only a local, no-network once-per-day bookkeeping value.
 const DAILY_ACTIVE_TRACKED_DAY_KEY: &str = "analytics.daily_active_day";
-const DAILY_ACTIVE_EVENT_NAME: &str = "app_started";
 const MAX_CONCURRENT_PROBES: usize = 4;
 
 fn probe_worker_count(plugin_count: usize) -> usize {
@@ -59,7 +60,7 @@ fn track_daily_active_if_needed(app_handle: &tauri::AppHandle) {
         Ok(store) => store,
         Err(error) => {
             log::warn!(
-                "Failed to access settings store for daily analytics gate: {}",
+                "Failed to access settings store for daily active marker: {}",
                 error
             );
             return;
@@ -74,23 +75,21 @@ fn track_daily_active_if_needed(app_handle: &tauri::AppHandle) {
         return;
     }
 
-    if let Err(error) = app_handle.track_event(DAILY_ACTIVE_EVENT_NAME, None) {
-        log::warn!("Failed to track daily analytics event: {}", error);
-        return;
-    }
-
+    // Upstream emitted an anonymous analytics event here; the Windows fork has no
+    // telemetry, so we just record the day locally for the once-per-day gate.
     store.set(
         DAILY_ACTIVE_TRACKED_DAY_KEY,
         serde_json::Value::String(today),
     );
     if let Err(error) = store.save() {
-        log::warn!("Failed to save daily analytics tracked day: {}", error);
+        log::warn!("Failed to save daily active marker: {}", error);
     }
 }
 
 #[cfg(not(desktop))]
 fn track_daily_active_if_needed(app_handle: &tauri::AppHandle) {
-    let _ = app_handle.track_event(DAILY_ACTIVE_EVENT_NAME, None);
+    // Telemetry removed in the Windows fork.
+    let _ = app_handle;
 }
 
 #[cfg(desktop)]
@@ -204,10 +203,7 @@ fn init_panel(app_handle: tauri::AppHandle) {
 
 #[tauri::command]
 fn hide_panel(app_handle: tauri::AppHandle) {
-    use tauri_nspanel::ManagerExt;
-    if let Ok(panel) = app_handle.get_webview_panel("main") {
-        panel.hide();
-    }
+    panel::hide_panel(&app_handle);
 }
 
 #[tauri::command]
@@ -509,12 +505,29 @@ pub fn run() {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     let _guard = runtime.enter();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_aptabase::Builder::new("A-US-6435241436").build())
+    // Windows: stop WebView2 (Chromium) from throttling/suspending background
+    // timers while the panel window is hidden, so the JS auto-refresh interval
+    // keeps firing. This is the Windows analog of the macOS WebKit
+    // `inactiveSchedulingPolicy` tweak in webkit_config.rs, and must be set
+    // before any webview is created.
+    #[cfg(target_os = "windows")]
+    {
+        // SAFETY: set at startup before any webview or extra thread is created.
+        unsafe {
+            std::env::set_var(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                "--disable-background-timer-throttling \
+                 --disable-renderer-backgrounding \
+                 --disable-backgrounding-occluded-windows",
+            );
+        }
+    }
+
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::default().build())
-        .plugin(tauri_nspanel::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -531,7 +544,16 @@ pub fn run() {
         )
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_autostart::Builder::new().build())
+        .plugin(tauri_plugin_autostart::Builder::new().build());
+
+    // macOS-only: the NSPanel plugin backs the menu-bar popover. On Windows/Linux
+    // the panel is a regular WebviewWindow (see panel.rs), so it is not needed.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             init_panel,
             hide_panel,

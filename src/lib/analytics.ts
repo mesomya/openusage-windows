@@ -1,20 +1,10 @@
-import { invoke, isTauri } from "@tauri-apps/api/core"
-
 /**
- * Thin wrapper around Aptabase's trackEvent.
- * Aptabase only supports string and number property values.
+ * Telemetry was removed in the Windows fork. `track` is kept as a no-op so the
+ * call sites don't need to change, but it never sends anything anywhere.
  */
-const APTABASE_TRACK_EVENT_CMD = "plugin:aptabase|track_event"
-
 export function track(
-  event: string,
-  props?: Record<string, string | number>,
-) {
-  const tauriRuntime = isTauri()
-
-  if (!tauriRuntime) {
-    return
-  }
-
-  void invoke(APTABASE_TRACK_EVENT_CMD, { name: event, props })
+  _event: string,
+  _props?: Record<string, string | number>,
+): void {
+  // Intentionally does nothing — no analytics in this build.
 }

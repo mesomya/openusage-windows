@@ -2,11 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenUsage",
   "version": "0.6.27",
-  "identifier": "com.sunstory.openusage",
+  "identifier": "com.mesomya.openusage",
   "build": {
-    "beforeDevCommand": "bun run bundle:plugins && bun run dev",
+    "beforeDevCommand": "npm run bundle:plugins && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run bundle:plugins && bun run build",
+    "beforeBuildCommand": "npm run bundle:plugins && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -19,6 +19,7 @@
         "resizable": false,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "visible": false
       }
     ],
@@ -61,9 +62,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU2Njk4QTU0MDMzMEY5MTkKUldRWitUQURWSXBwVnFTY1FBWitxNlpaQnB5S3RVWW1qWHJ3NlRuZ2p3c2hPVzNTa3BUR0V0SXkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxMjI0M0MyMDA5RTc4ODcKUldTSGVKNEF3a01pa1pPOXB1S2dpdTFwSFE0eVNjM3JlYy9GVU52S085bTNUdUxUL08zS2Z4QWIK",
       "endpoints": [
-        "https://github.com/robinebers/openusage/releases/latest/download/latest.json"
+        "https://github.com/mesomya/openusage-windows/releases/latest/download/latest.json"
       ]
     }
   }

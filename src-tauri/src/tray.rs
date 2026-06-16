@@ -1,14 +1,13 @@
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::path::BaseDirectory;
-use tauri::tray::{MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_store::StoreExt;
 
 use crate::log_path;
-use crate::panel::{get_or_init_panel, position_panel_at_tray_icon, show_panel};
+use crate::panel::{handle_tray_click, show_panel};
 
 const LOG_LEVEL_STORE_KEY: &str = "logLevel";
 
@@ -156,7 +155,9 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id("tray")
         .icon(icon)
-        .icon_as_template(true)
+        // Template (monochrome, auto-tinted) icons are a macOS menu-bar concept.
+        // On Windows/Linux the tray icon must be a normal full-color image.
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip("OpenUsage")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -216,24 +217,18 @@ pub fn create(app_handle: &AppHandle) -> tauri::Result<()> {
             let app_handle = tray.app_handle();
 
             if let TrayIconEvent::Click {
-                button_state, rect, ..
+                button,
+                button_state,
+                rect,
+                ..
             } = event
             {
-                if button_state == MouseButtonState::Up {
-                    let Some(panel) = get_or_init_panel!(app_handle) else {
-                        return;
-                    };
-
-                    if panel.is_visible() {
-                        log::debug!("tray click: hiding panel");
-                        panel.hide();
-                        return;
-                    }
-                    log::debug!("tray click: showing panel");
-
-                    // macOS quirk: must show window before positioning to another monitor
-                    panel.show_and_make_key();
-                    position_panel_at_tray_icon(app_handle, rect.position, rect.size);
+                // Left-click toggles the panel; right-click is reserved for the
+                // context menu (which opens on its own). Filtering by button
+                // matters on Windows, where a right-click would otherwise both
+                // open the menu and toggle the panel.
+                if button == MouseButton::Left && button_state == MouseButtonState::Up {
+                    handle_tray_click(app_handle, rect.position, rect.size);
                 }
             }
         })

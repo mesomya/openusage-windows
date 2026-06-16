@@ -238,6 +238,13 @@ fn read_env_from_interactive_shell(program: &str, name: &str) -> Option<String> 
 }
 
 fn read_env_from_interactive_shells(name: &str) -> Option<String> {
+    // Windows GUI processes inherit user/system env vars directly; there is no
+    // interactive login shell to consult (and no POSIX shell to spawn), so skip
+    // this macOS/Linux-only fallback entirely.
+    if cfg!(windows) {
+        return None;
+    }
+
     let mut programs: Vec<String> = Vec::new();
 
     if let Some(shell) = shell_from_env() {
@@ -1315,6 +1322,192 @@ struct LsDiscoverResult {
     extension_port: Option<i32>,
 }
 
+/// Enumerate running processes as (pid, command_line) on Windows via a single
+/// PowerShell CIM query. Returns None if the query fails. Processes whose command
+/// line is inaccessible (most system processes) are skipped.
+#[cfg(windows)]
+fn ls_enumerate_processes_windows() -> Option<Vec<(i32, String)>> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    // ConvertTo-Json yields a bare object when there is a single result.
+    let items = match json {
+        serde_json::Value::Array(arr) => arr,
+        obj @ serde_json::Value::Object(_) => vec![obj],
+        _ => return None,
+    };
+    let mut processes = Vec::new();
+    for item in items {
+        let pid = item.get("ProcessId").and_then(|v| v.as_i64());
+        let command = item.get("CommandLine").and_then(|v| v.as_str());
+        if let (Some(pid), Some(command)) = (pid, command) {
+            processes.push((pid as i32, command.to_string()));
+        }
+    }
+    Some(processes)
+}
+
+/// Listening TCP ports for a PID on Windows, parsed from `netstat -ano`.
+#[cfg(windows)]
+fn ls_listening_ports_for_pid_windows(target_pid: i32) -> Vec<i32> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = match std::process::Command::new("netstat")
+        .args(["-ano", "-p", "TCP"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ports = std::collections::BTreeSet::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.contains("LISTENING") {
+            continue;
+        }
+        // Columns: Proto  Local Address  Foreign Address  State  PID
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 5 {
+            continue;
+        }
+        let Ok(line_pid) = cols[cols.len() - 1].parse::<i32>() else {
+            continue;
+        };
+        if line_pid != target_pid {
+            continue;
+        }
+        let local = cols[1];
+        if let Some(colon) = local.rfind(':') {
+            if let Ok(port) = local[colon + 1..].parse::<i32>() {
+                if port > 0 && port < 65536 {
+                    ports.insert(port);
+                }
+            }
+        }
+    }
+    ports.into_iter().collect()
+}
+
+/// Windows/Linux equivalent of the macOS `ps` + `lsof` language-server discovery.
+/// Uses the same matching helpers as the macOS path; only the process and port
+/// enumeration is platform-specific.
+#[cfg(windows)]
+fn ls_discover_windows<'js>(
+    plugin_id: &str,
+    opts: &LsDiscoverOpts,
+    ctx: &Ctx<'js>,
+) -> rquickjs::Result<String> {
+    let processes = match ls_enumerate_processes_windows() {
+        Some(p) => p,
+        None => {
+            log::warn!("[plugin:{}] process enumeration failed", plugin_id);
+            return Ok("null".to_string());
+        }
+    };
+
+    let process_name_lower = opts.process_name.to_lowercase();
+    let markers_lower: Vec<String> = opts
+        .markers
+        .iter()
+        .map(|m| m.trim().to_lowercase())
+        .filter(|m| !m.is_empty())
+        .collect();
+
+    let mut candidates: Vec<(u8, i32, String)> = Vec::new();
+    for (proc_pid, command) in &processes {
+        if !ls_command_matches_process(command, &process_name_lower) {
+            continue;
+        }
+        let Some(rank) = ls_marker_rank(command, &markers_lower) else {
+            continue;
+        };
+        candidates.push((rank, *proc_pid, command.clone()));
+    }
+
+    if candidates.is_empty() {
+        log::info!("[plugin:{}] LS process not found", plugin_id);
+        return Ok("null".to_string());
+    }
+
+    candidates.sort_by_key(|(rank, _, _)| *rank);
+    for (_, process_pid, command) in candidates {
+        let csrf = if opts.csrf_flag.trim().is_empty() {
+            String::new()
+        } else {
+            match ls_extract_flag(&command, &opts.csrf_flag) {
+                Some(c) => c,
+                None => {
+                    log::warn!(
+                        "[plugin:{}] CSRF token not found in process args",
+                        plugin_id
+                    );
+                    continue;
+                }
+            }
+        };
+
+        let extension_port = opts.port_flag.as_ref().and_then(|flag| {
+            ls_extract_flag(&command, flag).and_then(|v| v.parse::<i32>().ok())
+        });
+
+        let mut extra = std::collections::HashMap::new();
+        if let Some(ref flags) = opts.extra_flags {
+            for flag in flags {
+                if let Some(val) = ls_extract_flag(&command, flag) {
+                    let key = flag.trim_start_matches('-').to_string();
+                    extra.insert(key, val);
+                }
+            }
+        }
+
+        let ports = ls_listening_ports_for_pid_windows(process_pid);
+        if ports.is_empty() && extension_port.is_none() {
+            log::warn!(
+                "[plugin:{}] no listening ports found for pid {}",
+                plugin_id,
+                process_pid
+            );
+            continue;
+        }
+
+        log::info!(
+            "[plugin:{}] LS found: pid={}, ports={:?}, csrf=[REDACTED]",
+            plugin_id,
+            process_pid,
+            ports
+        );
+
+        let result = LsDiscoverResult {
+            pid: process_pid,
+            csrf,
+            ports,
+            extra,
+            extension_port,
+        };
+
+        return serde_json::to_string(&result)
+            .map_err(|e| Exception::throw_message(ctx, &format!("serialize failed: {}", e)));
+    }
+
+    Ok("null".to_string())
+}
+
 fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquickjs::Result<()> {
     let ls_obj = Object::new(ctx.clone())?;
     let pid = plugin_id.to_string();
@@ -1335,6 +1528,8 @@ fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquick
                     opts.markers
                 );
 
+                #[cfg(target_os = "macos")]
+                {
                 let ps_output = match std::process::Command::new("/bin/ps")
                     .args(["-ax", "-o", "pid=,command="])
                     .output()
@@ -1493,6 +1688,18 @@ fn inject_ls<'js>(ctx: &Ctx<'js>, host: &Object<'js>, plugin_id: &str) -> rquick
                 }
 
                 Ok("null".to_string())
+                }
+
+                #[cfg(windows)]
+                {
+                    ls_discover_windows(&pid, &opts, &ctx_inner)
+                }
+
+                #[cfg(all(not(target_os = "macos"), not(windows)))]
+                {
+                    let _ = (&opts, &ctx_inner);
+                    Ok("null".to_string())
+                }
             },
         )?,
     )?;
@@ -1602,6 +1809,8 @@ fn ls_command_matches_process(command: &str, process_name_lower: &str) -> bool {
 }
 
 /// Parse listening port numbers from `lsof -nP -iTCP -sTCP:LISTEN` output.
+/// macOS-only: the Windows path parses `netstat` output instead.
+#[cfg(target_os = "macos")]
 fn ls_parse_listening_ports(output: &str) -> Vec<i32> {
     let mut ports = std::collections::BTreeSet::new();
     for line in output.lines() {
@@ -1786,56 +1995,73 @@ fn ccusage_home_override<'a>(
 }
 
 fn ccusage_runner_candidates(kind: CcusageRunnerKind) -> Vec<String> {
-    let mut candidates: Vec<String> = Vec::new();
-    match kind {
-        CcusageRunnerKind::Bunx => {
-            if let Some(home) = dirs::home_dir() {
-                candidates.push(home.join(".bun/bin/bunx").to_string_lossy().to_string());
-            }
-            candidates.extend(
-                ["/opt/homebrew/bin/bunx", "/usr/local/bin/bunx", "bunx"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-        }
-        CcusageRunnerKind::PnpmDlx => {
-            candidates.extend(
-                ["/opt/homebrew/bin/pnpm", "/usr/local/bin/pnpm", "pnpm"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-        }
-        CcusageRunnerKind::YarnDlx => {
-            candidates.extend(
-                ["/opt/homebrew/bin/yarn", "/usr/local/bin/yarn", "yarn"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-        }
-        CcusageRunnerKind::NpmExec => {
-            candidates.extend(
-                ["/opt/homebrew/bin/npm", "/usr/local/bin/npm", "npm"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-        }
-        CcusageRunnerKind::Npx => {
-            candidates.extend(
-                ["/opt/homebrew/bin/npx", "/usr/local/bin/npx", "npx"]
-                    .into_iter()
-                    .map(str::to_string),
-            );
-        }
+    // On Windows these runners are `.cmd`/`.exe` shims resolved from PATH by
+    // cmd.exe (build_ccusage_command wraps the call in `cmd /C`), so the bare
+    // command name is exactly what's needed.
+    #[cfg(windows)]
+    {
+        return match kind {
+            CcusageRunnerKind::Bunx => vec!["bunx".to_string()],
+            CcusageRunnerKind::PnpmDlx => vec!["pnpm".to_string()],
+            CcusageRunnerKind::YarnDlx => vec!["yarn".to_string()],
+            CcusageRunnerKind::NpmExec => vec!["npm".to_string()],
+            CcusageRunnerKind::Npx => vec!["npx".to_string()],
+        };
     }
 
-    let mut unique = Vec::new();
-    for candidate in candidates {
-        if candidate.is_empty() || unique.iter().any(|c| c == &candidate) {
-            continue;
+    #[cfg(not(windows))]
+    {
+        let mut candidates: Vec<String> = Vec::new();
+        match kind {
+            CcusageRunnerKind::Bunx => {
+                if let Some(home) = dirs::home_dir() {
+                    candidates.push(home.join(".bun/bin/bunx").to_string_lossy().to_string());
+                }
+                candidates.extend(
+                    ["/opt/homebrew/bin/bunx", "/usr/local/bin/bunx", "bunx"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+            CcusageRunnerKind::PnpmDlx => {
+                candidates.extend(
+                    ["/opt/homebrew/bin/pnpm", "/usr/local/bin/pnpm", "pnpm"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+            CcusageRunnerKind::YarnDlx => {
+                candidates.extend(
+                    ["/opt/homebrew/bin/yarn", "/usr/local/bin/yarn", "yarn"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+            CcusageRunnerKind::NpmExec => {
+                candidates.extend(
+                    ["/opt/homebrew/bin/npm", "/usr/local/bin/npm", "npm"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+            CcusageRunnerKind::Npx => {
+                candidates.extend(
+                    ["/opt/homebrew/bin/npx", "/usr/local/bin/npx", "npx"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
         }
-        unique.push(candidate);
+
+        let mut unique = Vec::new();
+        for candidate in candidates {
+            if candidate.is_empty() || unique.iter().any(|c| c == &candidate) {
+                continue;
+            }
+            unique.push(candidate);
+        }
+        unique
     }
-    unique
 }
 
 fn nvm_default_bin_path(home: &Path) -> Option<PathBuf> {
@@ -1904,9 +2130,30 @@ fn ccusage_enriched_path() -> Option<OsString> {
     ccusage_enriched_path_with(home.as_deref(), existing_path.as_deref())
 }
 
+/// Build the base command for a ccusage runner with its args applied. On Windows
+/// the runners are `.cmd` shims that `CreateProcess` can't launch directly, so we
+/// run them through `cmd /C` (and suppress the console window so a GUI refresh
+/// doesn't flash a black box); elsewhere we invoke the program directly.
+fn build_ccusage_command(program: &str, args: &[String]) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new("cmd");
+        command.arg("/C").arg(program).args(args);
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = std::process::Command::new(program);
+        command.args(args);
+        command
+    }
+}
+
 fn ccusage_runner_available(candidate: &str, enriched_path: Option<&OsStr>) -> bool {
-    let mut command = std::process::Command::new(candidate);
-    command.arg("--version");
+    let mut command = build_ccusage_command(candidate, &["--version".to_string()]);
     if let Some(path) = enriched_path {
         command.env("PATH", path);
     }
@@ -1917,12 +2164,7 @@ fn ccusage_runner_available(candidate: &str, enriched_path: Option<&OsStr>) -> b
     command.status().map(|s| s.success()).unwrap_or(false)
 }
 
-fn configure_ccusage_command(
-    command: &mut std::process::Command,
-    args: &[String],
-    enriched_path: Option<&OsStr>,
-) {
-    command.args(args);
+fn configure_ccusage_command(command: &mut std::process::Command, enriched_path: Option<&OsStr>) {
     if let Some(path) = enriched_path {
         command.env("PATH", path);
     }
@@ -2210,8 +2452,8 @@ fn run_ccusage_with_runner_timeout(
 ) -> CcusageRunnerResult {
     let args = ccusage_runner_args(kind, opts, provider, flavor);
     let enriched_path = ccusage_enriched_path();
-    let mut command = std::process::Command::new(program);
-    configure_ccusage_command(&mut command, &args, enriched_path.as_deref());
+    let mut command = build_ccusage_command(program, &args);
+    configure_ccusage_command(&mut command, enriched_path.as_deref());
 
     if let Some(home_path) = ccusage_home_override(opts, provider) {
         let config = ccusage_provider_config(provider);
@@ -2755,9 +2997,68 @@ fn inject_keychain<'js>(
     Ok(())
 }
 
+/// Build a SQLite file URI for an OS path. On Windows an absolute path like
+/// `C:\x` becomes `file:///C:/x`; on Unix `/x` becomes `file:///x`. Characters
+/// special to URIs are percent-encoded (`%` first).
+fn sqlite_file_uri(path: &str, immutable: bool) -> String {
+    let mut p = path.replace('\\', "/");
+    p = p
+        .replace('%', "%25")
+        .replace('?', "%3F")
+        .replace('#', "%23")
+        .replace(' ', "%20");
+    let prefix = if p.starts_with('/') { "file://" } else { "file:///" };
+    let query = if immutable { "?immutable=1" } else { "" };
+    format!("{}{}{}", prefix, p, query)
+}
+
+/// Run a read-only SQL query and return the rows as a JSON array of objects,
+/// matching the shape the `sqlite3 -json` CLI produced upstream. `uri` selects
+/// whether `target` is interpreted as a SQLite URI (used for the immutable
+/// fallback) or a plain filesystem path.
+fn sqlite_query_rows_json(target: &str, sql: &str, uri: bool) -> rusqlite::Result<String> {
+    let mut flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    if uri {
+        flags |= rusqlite::OpenFlags::SQLITE_OPEN_URI;
+    }
+    let conn = rusqlite::Connection::open_with_flags(target, flags)?;
+    let mut stmt = conn.prepare(sql)?;
+    let column_names: Vec<String> = stmt.column_names().into_iter().map(String::from).collect();
+
+    let mut rows = stmt.query([])?;
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let mut obj = serde_json::Map::with_capacity(column_names.len());
+        for (i, name) in column_names.iter().enumerate() {
+            let value = match row.get_ref(i)? {
+                rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                rusqlite::types::ValueRef::Integer(n) => serde_json::Value::from(n),
+                rusqlite::types::ValueRef::Real(f) => serde_json::Number::from_f64(f)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null),
+                rusqlite::types::ValueRef::Text(bytes) => {
+                    serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned())
+                }
+                // App-state DBs (Cursor, Antigravity, ...) frequently store JSON
+                // text in BLOB columns; surface it as a string so plugins can
+                // parse it, matching the CLI's behavior.
+                rusqlite::types::ValueRef::Blob(bytes) => {
+                    serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned())
+                }
+            };
+            obj.insert(name.clone(), value);
+        }
+        out.push(serde_json::Value::Object(obj));
+    }
+
+    Ok(serde_json::Value::Array(out).to_string())
+}
+
 fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()> {
     let sqlite_obj = Object::new(ctx.clone())?;
 
+    // Embedded SQLite (rusqlite) replaces the macOS `sqlite3` CLI shell-out so
+    // SQLite-backed providers work on every platform with no external binary.
     sqlite_obj.set(
         "query",
         Function::new(
@@ -2766,52 +3067,29 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                 if sql.lines().any(|line| line.trim_start().starts_with('.')) {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        "sqlite3 dot-commands are not allowed",
+                        "sqlite dot-commands are not allowed",
                     ));
                 }
                 let expanded = expand_path(&db_path);
 
                 // Prefer a normal read-only open so WAL contents are visible (common for app state DBs).
-                // Fall back to immutable=1 to bypass WAL/SHM lock issues after macOS sleep.
-                let primary = std::process::Command::new("sqlite3")
-                    .args(["-readonly", "-json", &expanded, &sql])
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
-                    })?;
-
-                if primary.status.success() {
-                    return Ok(String::from_utf8_lossy(&primary.stdout).to_string());
+                // Fall back to immutable=1 to bypass WAL/SHM lock issues (e.g. the DB is open elsewhere).
+                match sqlite_query_rows_json(&expanded, &sql, false) {
+                    Ok(json) => Ok(json),
+                    Err(primary_err) => {
+                        let uri = sqlite_file_uri(&expanded, true);
+                        match sqlite_query_rows_json(&uri, &sql, true) {
+                            Ok(json) => Ok(json),
+                            Err(fallback_err) => Err(Exception::throw_message(
+                                &ctx_inner,
+                                &format!(
+                                    "sqlite error: {} (fallback: {})",
+                                    primary_err, fallback_err
+                                ),
+                            )),
+                        }
+                    }
                 }
-
-                // Percent-encode special chars for valid URI (% must be first!)
-                let encoded = expanded
-                    .replace('%', "%25")
-                    .replace(' ', "%20")
-                    .replace('#', "%23")
-                    .replace('?', "%3F");
-                let uri_path = format!("file:{}?immutable=1", encoded);
-                let fallback = std::process::Command::new("sqlite3")
-                    .args(["-readonly", "-json", &uri_path, &sql])
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
-                    })?;
-
-                if !fallback.status.success() {
-                    let stderr_primary = String::from_utf8_lossy(&primary.stderr);
-                    let stderr_fallback = String::from_utf8_lossy(&fallback.stderr);
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!(
-                            "sqlite3 error: {} (fallback: {})",
-                            stderr_primary.trim(),
-                            stderr_fallback.trim()
-                        ),
-                    ));
-                }
-
-                Ok(String::from_utf8_lossy(&fallback.stdout).to_string())
             },
         )?,
     )?;
@@ -2824,25 +3102,16 @@ fn inject_sqlite<'js>(ctx: &Ctx<'js>, host: &Object<'js>) -> rquickjs::Result<()
                 if sql.lines().any(|line| line.trim_start().starts_with('.')) {
                     return Err(Exception::throw_message(
                         &ctx_inner,
-                        "sqlite3 dot-commands are not allowed",
+                        "sqlite dot-commands are not allowed",
                     ));
                 }
                 let expanded = expand_path(&db_path);
-                let output = std::process::Command::new("sqlite3")
-                    .args([&expanded, &sql])
-                    .output()
-                    .map_err(|e| {
-                        Exception::throw_message(&ctx_inner, &format!("sqlite3 exec failed: {}", e))
-                    })?;
-
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(Exception::throw_message(
-                        &ctx_inner,
-                        &format!("sqlite3 error: {}", stderr.trim()),
-                    ));
-                }
-
+                let conn = rusqlite::Connection::open(&expanded).map_err(|e| {
+                    Exception::throw_message(&ctx_inner, &format!("sqlite open failed: {}", e))
+                })?;
+                conn.execute_batch(&sql).map_err(|e| {
+                    Exception::throw_message(&ctx_inner, &format!("sqlite error: {}", e))
+                })?;
                 Ok(())
             },
         )?,

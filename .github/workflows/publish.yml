@@ -1,4 +1,12 @@
-name: Publish
+name: Publish (Windows)
+
+# Builds the Windows installer (NSIS) and updater manifest, then attaches them
+# to a GitHub release. Triggered by pushing a vMAJOR.MINOR.PATCH tag.
+#
+# Required repository secrets for signed auto-updates (optional but recommended):
+#   TAURI_SIGNING_PRIVATE_KEY           contents of the minisign private key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password (empty string if none)
+# Generate a key pair with: npm run tauri signer generate -- -w openusage.key
 
 on:
   push:
@@ -11,15 +19,7 @@ permissions:
 jobs:
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
@@ -27,20 +27,23 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "latest"
-      - run: bun install
+      - run: npm ci
+
       - name: Bundle plugins
-        run: bun run bundle:plugins
+        run: npm run bundle:plugins
+
       - name: Verify bundled plugins
+        shell: bash
         run: |
           COUNT=$(find src-tauri/resources/bundled_plugins -maxdepth 2 -name plugin.json | wc -l | tr -d ' ')
           if [[ "$COUNT" -lt 1 ]]; then
@@ -48,80 +51,34 @@ jobs:
             exit 1
           fi
 
-      - name: Validate release tag
+      - name: Validate release tag and versions
+        shell: bash
         run: |
-          if [[ -z "$RELEASE_TAG" ]]; then
-            echo "Missing RELEASE_TAG (push a v* tag)."
-            exit 1
-          fi
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid RELEASE_TAG: $RELEASE_TAG (expected vMAJOR.MINOR.PATCH)"
             exit 1
           fi
-
-      - name: Validate app version matches tag
-        run: |
           TAG_VERSION="${RELEASE_TAG#v}"
-
           TAURI_CONF_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')
           CARGO_VERSION=$(awk -F'"' '/^version =/ { print $2; exit }' ./src-tauri/Cargo.toml)
           PKG_VERSION=$(node -p 'require("./package.json").version')
-
-          if [[ "$TAURI_CONF_VERSION" != "$TAG_VERSION" ]]; then
-            echo "src-tauri/tauri.conf.json version ($TAURI_CONF_VERSION) != tag version ($TAG_VERSION)"
-            exit 1
-          fi
-          if [[ "$CARGO_VERSION" != "$TAG_VERSION" ]]; then
-            echo "src-tauri/Cargo.toml version ($CARGO_VERSION) != tag version ($TAG_VERSION)"
-            exit 1
-          fi
-          if [[ "$PKG_VERSION" != "$TAG_VERSION" ]]; then
-            echo "package.json version ($PKG_VERSION) != tag version ($TAG_VERSION)"
-            exit 1
-          fi
-
-      - name: Import Apple Developer Certificate
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
-          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
-          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
-          rm certificate.p12
+          for pair in "tauri.conf.json:$TAURI_CONF_VERSION" "Cargo.toml:$CARGO_VERSION" "package.json:$PKG_VERSION"; do
+            name="${pair%%:*}"; ver="${pair#*:}"
+            if [[ "$ver" != "$TAG_VERSION" ]]; then
+              echo "$name version ($ver) != tag version ($TAG_VERSION)"
+              exit 1
+            fi
+          done
 
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: ${{ env.RELEASE_TAG }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
-          args: ${{ matrix.args }}
-
-      - name: Verify updater assets uploaded
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ASSETS=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | tr -d '\r')
-
-          printf '%s\n' "$ASSETS" | grep -Fxq 'latest.json' || { echo "Missing updater manifest: latest.json"; exit 1; }
-          printf '%s\n' "$ASSETS" | grep -Eq '\.sig$' || { echo "Missing updater signatures (.sig)"; exit 1; }
+          args: --bundles nsis

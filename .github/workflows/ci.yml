@@ -3,25 +3,44 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   check:
-    name: Lint, Type-check, Build, Test
-    runs-on: ubuntu-latest
+    name: Build & Test (Windows)
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
+          node-version: 22
 
-      - run: bun install
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Type-check and build
-        run: bun run build
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
 
-      - name: Run tests
-        run: bun run test
+      - run: npm ci
+
+      - name: Bundle plugins
+        run: npm run bundle:plugins
+
+      - name: Type-check & build frontend
+        run: npm run build
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Rust check
+        working-directory: src-tauri
+        run: cargo check
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
