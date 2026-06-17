@@ -1,5 +1,4 @@
 import { ProviderCard } from "@/components/provider-card"
-import { RetirementNotice } from "@/components/retirement-notice"
 import type { PluginDisplayState } from "@/lib/plugin-types"
 import type { DisplayMode, ResetTimerDisplayMode, TimeFormatMode } from "@/lib/settings"
 
@@ -22,7 +21,6 @@ export function OverviewPage({
 }: OverviewPageProps) {
   return (
     <div>
-      <RetirementNotice />
       {plugins.length === 0 ? (
         <div className="text-center text-muted-foreground py-8">
           No providers enabled

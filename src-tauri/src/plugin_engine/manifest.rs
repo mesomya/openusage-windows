@@ -1,6 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,21 +122,36 @@ fn load_single_plugin(
     if manifest.entry.trim().is_empty() {
         return Err("plugin entry field cannot be empty".into());
     }
-    if Path::new(&manifest.entry).is_absolute() {
+    let entry_rel = Path::new(&manifest.entry);
+    if entry_rel.is_absolute() {
         return Err("plugin entry must be a relative path".into());
     }
-
-    let entry_path = plugin_dir.join(&manifest.entry);
-    let canonical_plugin_dir = plugin_dir.canonicalize()?;
-    let canonical_entry_path = entry_path.canonicalize()?;
-    if !canonical_entry_path.starts_with(&canonical_plugin_dir) {
+    // Guard against path traversal with a component check rather than
+    // canonicalize()+starts_with. On Windows, canonicalize() can resolve a
+    // directory and a file beneath it to *different* roots when the path runs
+    // through filesystem virtualization / redirected (roaming) folders — e.g.
+    // a dir canonicalizes under AppData\Roaming while the file inside it
+    // canonicalizes under AppData\Local\Packages\...\LocalCache\Roaming. That
+    // made every legitimate entry look like it escaped its plugin dir, so no
+    // plugins loaded. Rejecting `..`/absolute/root components on the relative
+    // entry is portable and sufficient: the bundled tree contains no symlinks
+    // (copy_dir_recursive skips them).
+    let escapes = entry_rel.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    });
+    if escapes {
         return Err("plugin entry must remain within plugin directory".into());
     }
-    if !canonical_entry_path.is_file() {
+
+    let entry_path = plugin_dir.join(entry_rel);
+    if !entry_path.is_file() {
         return Err("plugin entry must be a file".into());
     }
 
-    let entry_script = std::fs::read_to_string(&canonical_entry_path)?;
+    let entry_script = std::fs::read_to_string(&entry_path)?;
 
     let icon_file = plugin_dir.join(&manifest.icon);
     let icon_bytes = std::fs::read(&icon_file)?;
@@ -185,6 +200,64 @@ mod tests {
 
     fn parse_manifest(json: &str) -> PluginManifest {
         serde_json::from_str::<PluginManifest>(json).expect("manifest parse failed")
+    }
+
+    fn write_plugin_dir(entry: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "openusage-manifest-{}-{}",
+            std::process::id(),
+            suffix
+        ));
+        std::fs::create_dir_all(&dir).expect("create plugin dir");
+        std::fs::write(
+            dir.join("plugin.json"),
+            format!(
+                r##"{{"schemaVersion":1,"id":"t","name":"T","version":"0.0.1","entry":"{}","icon":"icon.svg","brandColor":null,"lines":[]}}"##,
+                entry
+            ),
+        )
+        .expect("write manifest");
+        std::fs::write(dir.join("plugin.js"), "globalThis.__x = 1").expect("write entry");
+        std::fs::write(
+            dir.join("icon.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>"#,
+        )
+        .expect("write icon");
+        dir
+    }
+
+    #[test]
+    fn load_single_plugin_loads_normal_relative_entry() {
+        let dir = write_plugin_dir("plugin.js");
+        let loaded = load_single_plugin(&dir).expect("plugin should load");
+        assert_eq!(loaded.manifest.id, "t");
+        assert_eq!(loaded.entry_script, "globalThis.__x = 1");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_single_plugin_rejects_parent_dir_traversal_in_entry() {
+        let dir = write_plugin_dir("../evil.js");
+        let err = load_single_plugin(&dir).expect_err("traversal must be rejected");
+        assert!(err.to_string().contains("remain within plugin directory"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_single_plugin_rejects_absolute_entry() {
+        let abs = if cfg!(windows) { "C:/evil.js" } else { "/evil.js" };
+        let dir = write_plugin_dir(abs);
+        let err = load_single_plugin(&dir).expect_err("absolute entry must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("relative path") || msg.contains("remain within plugin directory"),
+            "unexpected error: {msg}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
