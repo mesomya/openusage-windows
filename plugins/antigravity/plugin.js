@@ -18,8 +18,8 @@
   // Upstream hard-codes Google's Antigravity OAuth client id/secret here. Those
   // belong to a third party, so this public fork does not republish them (GitHub
   // secret-scanning flags them too). Antigravity sign-in needs them supplied
-  // locally — copy the two values from upstream (robinebers/openusage,
-  // plugins/antigravity/plugin.js) into a local build. Other providers are
+  // locally — copy the two values from the upstream project's
+  // plugins/antigravity/plugin.js into a local build. Other providers are
   // unaffected, and Antigravity simply reports a sign-in error without them.
   var GOOGLE_CLIENT_ID = ""
   var GOOGLE_CLIENT_SECRET = ""

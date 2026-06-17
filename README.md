@@ -2,11 +2,12 @@
 
 See your usage at a glance from your system tray. No digging through dashboards.
 
-> **This is the Windows port of [OpenUsage](https://github.com/robinebers/openusage)** by
-> [Robin Ebers](https://github.com/robinebers). The upstream project is a macOS
-> menu-bar app built with Tauri; this repo carries that same Tauri edition to
-> Windows, keeping the UI, UX, providers, and behavior identical and changing
-> only what is fundamentally different between the two operating systems. See
+> **An unofficial Windows port of [OpenUsage](https://github.com/robinebers/openusage).**
+> The upstream project is a macOS menu-bar app built with Tauri; this repo carries
+> that same Tauri edition to Windows, keeping the UI, UX, providers, and behavior
+> identical and changing only what is fundamentally different between the two
+> operating systems. It is a separate community fork built for fun — not affiliated
+> with, endorsed by, or maintained alongside the upstream project. See
 > [What's different on Windows](#whats-different-on-windows) for the specifics.
 
 ![OpenUsage Screenshot](screenshot.png)
@@ -50,7 +51,7 @@ math required.
 - [**Devin**](docs/providers/devin.md) / weekly quota, extra usage
 - [**Z.ai**](docs/providers/zai.md) / session, weekly, web searches
 
-Want a provider that's not listed? [Open an issue.](https://github.com/mesomya/openusage-windows/issues/new)
+Providers are plugins — see the [plugin docs](docs/plugins/) for how they work.
 
 ## What's different on Windows
 
@@ -90,18 +91,18 @@ compiled only on macOS, so they simply don't exist in the Windows build.
 
 ## Credits
 
-This is an unofficial Windows port of **[OpenUsage](https://github.com/robinebers/openusage)**
-by **[Robin Ebers](https://github.com/robinebers)** — all the original design,
-providers, and ideas are his. Upstream is itself inspired by
-[CodexBar](https://github.com/steipete/CodexBar) by
-[@steipete](https://github.com/steipete).
+This is an unofficial Windows port of the **[OpenUsage](https://github.com/robinebers/openusage)**
+project — all of the original design, providers, and ideas come from upstream.
+This fork only adapts that work to run on Windows.
 
-"OpenUsage" may be a trademark of the upstream author; this fork uses the name
-only to describe what it is and is not an official build.
+"OpenUsage" is the upstream project's name; this fork uses it only to describe
+what it is, and is not an official build. It is built for fun and is **not
+actively maintained** — there is no issue tracker or support channel here.
 
 ## License
 
-[MIT](LICENSE) — same as upstream.
+[MIT](LICENSE) — the original copyright is retained in [LICENSE](LICENSE), as the
+MIT license requires.
 
 ---
 
