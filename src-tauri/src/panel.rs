@@ -384,6 +384,10 @@ mod other {
 
     fn show(app_handle: &AppHandle) {
         if let Some(window) = app_handle.get_webview_window("main") {
+            // The caller positioned the window first; reveal and focus it. The
+            // first show is also what boots the WebView2 page (a window that has
+            // never been on-screen doesn't run its scripts on Windows), so the
+            // frontend bootstraps + probes here.
             let _ = window.show();
             let _ = window.set_focus();
             VISIBLE.store(true, Ordering::SeqCst);
@@ -418,7 +422,8 @@ mod other {
             return Ok(());
         };
 
-        // Popover behavior: floats above other windows, stays out of the taskbar.
+        // Popover behavior: floats above other windows, stays out of the taskbar
+        // and Alt+Tab (skip_taskbar sets WS_EX_TOOLWINDOW on Windows).
         let _ = window.set_always_on_top(true);
         let _ = window.set_skip_taskbar(true);
 

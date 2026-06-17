@@ -505,10 +505,12 @@ pub fn run() {
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
     let _guard = runtime.enter();
 
-    // Windows: stop WebView2 (Chromium) from throttling/suspending background
-    // timers while the panel window is hidden, so the JS auto-refresh interval
-    // keeps firing. This is the Windows analog of the macOS WebKit
-    // `inactiveSchedulingPolicy` tweak in webkit_config.rs, and must be set
+    // Windows: reduce WebView2 (Chromium) throttling of timers when the panel
+    // window is occluded or in the background, so the JS auto-refresh interval
+    // stays responsive while the panel is open but not focused. (A fully hidden
+    // window's webview is still suspended by Windows — that is why the panel
+    // refreshes on open rather than continuously in the tray.) Loosely the
+    // analog of the macOS WebKit `inactiveSchedulingPolicy` tweak; must be set
     // before any webview is created.
     #[cfg(target_os = "windows")]
     {
