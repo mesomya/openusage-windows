@@ -322,6 +322,30 @@ pub(super) fn enabled_snapshots_ordered(state: &CacheState) -> Vec<CachedPluginS
         .collect()
 }
 
+/// The enabled provider ids, ordered (settings order first, then remaining known
+/// ids), using the same enable rules as `enabled_snapshots_ordered`. Used by the
+/// Windows background-refresh loop to decide what to probe.
+pub fn enabled_plugin_ids(app_data_dir: &Path, known_ids: &[String]) -> Vec<String> {
+    let (settings_order, disabled, has_settings) = read_plugin_settings(app_data_dir);
+    let default_enabled: HashSet<&str> = DEFAULT_ENABLED_PLUGINS.iter().copied().collect();
+    let is_enabled = |id: &str| -> bool {
+        if has_settings {
+            !disabled.contains(id)
+        } else {
+            default_enabled.contains(id)
+        }
+    };
+
+    let mut ordered: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    for id in settings_order.iter().chain(known_ids.iter()) {
+        if known_ids.iter().any(|k| k == id) && seen.insert(id.clone()) {
+            ordered.push(id.clone());
+        }
+    }
+    ordered.into_iter().filter(|id| is_enabled(id)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -69,12 +69,13 @@ that are genuinely OS-specific were changed:
 - **`ccusage` (local token counts).** The `npx`/`bunx` runners are launched
   through `cmd /C` on Windows (with the console window suppressed), since `.cmd`
   shims can't be executed directly.
-- **Refresh model.** macOS keeps the hidden webview's JS alive (via a WebKit
-  scheduling tweak), so usage refreshes continuously in the background. Windows
-  WebView2 suspends a fully hidden window's scripts, so the panel refreshes when
-  you open it (and auto-refreshes while open); the tray reflects the last check.
-  WebView2 background-throttling flags are set so refresh stays responsive while
-  the panel is open but unfocused.
+- **Background refresh.** macOS keeps the hidden webview's JS alive (via a WebKit
+  scheduling tweak) to refresh continuously. Windows WebView2 suspends a hidden
+  window's scripts, so this fork refreshes from a small **Rust background loop**
+  instead: it re-probes your enabled providers on your chosen interval even while
+  the panel is closed, keeping the usage cache, the local HTTP API, and the tray
+  tooltip (hover to glance) up to date. The panel's full view and the rendered
+  in-icon metric update when you open it.
 - **TLS.** Uses the native OS TLS stack (SChannel on Windows) instead of
   bundling a C crypto library.
 - **No telemetry.** The upstream's anonymous analytics were removed from this

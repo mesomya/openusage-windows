@@ -119,6 +119,120 @@ fn spawn_daily_active_rollover_tracker(app_handle: tauri::AppHandle) {
     });
 }
 
+// --- Windows background refresh -------------------------------------------------
+// On Windows a hidden WebView2 window suspends its page scripts, so the
+// frontend's JS auto-refresh only runs while the panel is open. This Rust loop
+// re-probes the enabled providers on the configured interval regardless of the
+// panel, keeping the cached usage and the local HTTP API fresh and updating the
+// tray tooltip so usage is glanceable on hover. macOS/Linux keep the hidden
+// webview alive, so they don't need this.
+
+#[cfg(target_os = "windows")]
+fn read_auto_update_interval_minutes(app_handle: &tauri::AppHandle) -> u64 {
+    use tauri_plugin_store::StoreExt;
+    if let Ok(store) = app_handle.store("settings.json") {
+        if let Some(minutes) = store.get("autoUpdateInterval").and_then(|v| v.as_u64()) {
+            if minutes > 0 {
+                return minutes;
+            }
+        }
+    }
+    15
+}
+
+/// Build a one-line "Provider: Metric NN%" summary for the tray tooltip, using
+/// the provider's first progress metric (falling back to its first badge).
+#[cfg(target_os = "windows")]
+fn summarize_output(output: &plugin_engine::runtime::PluginOutput) -> Option<String> {
+    use plugin_engine::runtime::MetricLine;
+    for line in &output.lines {
+        if let MetricLine::Progress {
+            label, used, limit, ..
+        } = line
+        {
+            let pct = if *limit > 0.0 {
+                (used / limit * 100.0).round() as i64
+            } else {
+                0
+            };
+            return Some(format!("{}: {} {}%", output.display_name, label, pct));
+        }
+    }
+    for line in &output.lines {
+        if let MetricLine::Badge { label, text, .. } = line {
+            return Some(format!("{}: {} {}", output.display_name, label, text));
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn refresh_enabled_providers(app_handle: &tauri::AppHandle) {
+    use tauri::{Emitter, Manager};
+
+    let state = app_handle.state::<Mutex<AppState>>();
+    let (plugins, app_data_dir, app_version) = {
+        let Ok(locked) = state.lock() else {
+            return;
+        };
+        (
+            locked.plugins.clone(),
+            locked.app_data_dir.clone(),
+            locked.app_version.clone(),
+        )
+    };
+
+    let known_ids: Vec<String> = plugins.iter().map(|p| p.manifest.id.clone()).collect();
+    let enabled = local_http_api::enabled_plugin_ids(&app_data_dir, &known_ids);
+    if enabled.is_empty() {
+        return;
+    }
+
+    log::info!("background refresh: probing {:?}", enabled);
+    let mut summary: Vec<String> = Vec::new();
+    for plugin in plugins.iter().filter(|p| enabled.contains(&p.manifest.id)) {
+        let output = plugin_engine::runtime::run_probe(plugin, &app_data_dir, &app_version);
+        let has_error = output.lines.iter().any(|line| {
+            matches!(line, plugin_engine::runtime::MetricLine::Badge { label, .. } if label == "Error")
+        });
+        if !has_error {
+            local_http_api::cache_successful_output(&output);
+            if let Some(line) = summarize_output(&output) {
+                summary.push(line);
+            }
+        }
+        let _ = app_handle.emit(
+            "probe:result",
+            ProbeResult {
+                batch_id: "background".to_string(),
+                output,
+            },
+        );
+    }
+
+    if let Some(tray) = app_handle.tray_by_id("tray") {
+        let tooltip = if summary.is_empty() {
+            "OpenUsage".to_string()
+        } else {
+            summary.join("\n")
+        };
+        let _ = tray.set_tooltip(Some(&tooltip));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_background_refresh(app_handle: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        // Let startup settle (webview + first JS probe) before the first pass.
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        loop {
+            refresh_enabled_providers(&app_handle);
+            let minutes = read_auto_update_interval_minutes(&app_handle);
+            std::thread::sleep(std::time::Duration::from_secs(minutes.saturating_mul(60)));
+        }
+    });
+}
+
 #[cfg(desktop)]
 fn managed_shortcut_slot() -> &'static Mutex<Option<String>> {
     static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -649,6 +763,12 @@ pub fn run() {
                     }
                 }
             }
+
+            // Windows: keep usage fresh in the background and the tray tooltip
+            // live even while the panel is hidden (a hidden WebView2 window can't
+            // run the JS refresh — see refresh_enabled_providers).
+            #[cfg(target_os = "windows")]
+            spawn_background_refresh(app.handle().clone());
 
             Ok(())
         })
