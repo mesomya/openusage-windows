@@ -51,7 +51,7 @@ export const DEFAULT_RESET_TIMER_DISPLAY_MODE: ResetTimerDisplayMode = "relative
 export const DEFAULT_TIME_FORMAT_MODE: TimeFormatMode = "auto";
 export const DEFAULT_MENUBAR_ICON_STYLE: MenubarIconStyle = "provider";
 export const DEFAULT_MENUBAR_METRIC: MenubarMetric = "default";
-export const DEFAULT_GLOBAL_SHORTCUT: GlobalShortcut = null;
+export const DEFAULT_GLOBAL_SHORTCUT: GlobalShortcut = "CommandOrControl+Shift+U";
 export const DEFAULT_START_ON_LOGIN = false;
 
 const AUTO_UPDATE_INTERVALS: AutoUpdateIntervalMinutes[] = [5, 15, 30, 60];

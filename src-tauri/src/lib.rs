@@ -23,6 +23,10 @@ use uuid::Uuid;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const GLOBAL_SHORTCUT_STORE_KEY: &str = "globalShortcut";
+// Default panel hotkey when none is stored. Registered on startup so the panel
+// always has a working shortcut even if the settings file doesn't carry one
+// (Ctrl+Shift+U on Windows / Cmd+Shift+U on macOS).
+const DEFAULT_GLOBAL_SHORTCUT: &str = "CommandOrControl+Shift+U";
 // Records the last day the app ran. Upstream also sent an anonymous "app_started"
 // analytics event here; this Windows fork removes that third-party telemetry, so
 // the marker is now only a local, no-network once-per-day bookkeeping value.
@@ -732,35 +736,38 @@ pub fn run() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            // Register global shortcut from stored settings
+            // Register the global shortcut: the user's stored choice if present,
+            // otherwise a built-in default, so the panel always has a working
+            // hotkey. (The stored setting can be dropped by the settings store on
+            // some Windows startups, which previously left the panel with no
+            // shortcut at all.)
             #[cfg(desktop)]
             {
                 use tauri_plugin_store::StoreExt;
 
-                if let Ok(store) = app.handle().store("settings.json") {
-                    if let Some(shortcut_value) = store.get(GLOBAL_SHORTCUT_STORE_KEY) {
-                        if let Some(shortcut) = shortcut_value.as_str() {
-                            let shortcut = shortcut.trim();
-                            if !shortcut.is_empty() {
-                                let handle = app.handle().clone();
-                                log::info!("Registering initial global shortcut: {}", shortcut);
-                                if let Err(e) = handle.global_shortcut().on_shortcut(
-                                    shortcut,
-                                    |app, _shortcut, event| {
-                                        handle_global_shortcut(app, event);
-                                    },
-                                ) {
-                                    log::warn!("Failed to register initial global shortcut: {}", e);
-                                } else if let Ok(mut managed_shortcut) =
-                                    managed_shortcut_slot().lock()
-                                {
-                                    *managed_shortcut = Some(shortcut.to_string());
-                                } else {
-                                    log::warn!("Failed to store managed shortcut in memory");
-                                }
-                            }
-                        }
-                    }
+                let stored = app
+                    .handle()
+                    .store("settings.json")
+                    .ok()
+                    .and_then(|store| store.get(GLOBAL_SHORTCUT_STORE_KEY))
+                    .and_then(|value| value.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty());
+                let shortcut = stored.unwrap_or_else(|| DEFAULT_GLOBAL_SHORTCUT.to_string());
+
+                let handle = app.handle().clone();
+                log::info!("Registering global shortcut: {}", shortcut);
+                if let Err(e) =
+                    handle
+                        .global_shortcut()
+                        .on_shortcut(shortcut.as_str(), |app, _shortcut, event| {
+                            handle_global_shortcut(app, event);
+                        })
+                {
+                    log::warn!("Failed to register global shortcut '{}': {}", shortcut, e);
+                } else if let Ok(mut managed_shortcut) = managed_shortcut_slot().lock() {
+                    *managed_shortcut = Some(shortcut);
+                } else {
+                    log::warn!("Failed to store managed shortcut in memory");
                 }
             }
 
