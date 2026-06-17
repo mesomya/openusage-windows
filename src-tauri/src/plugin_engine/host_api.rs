@@ -4479,20 +4479,13 @@ mod tests {
     #[test]
     fn configure_ccusage_command_sets_path_override() {
         let mut command = std::process::Command::new("echo");
-        let args = vec!["daily".to_string(), "--json".to_string()];
         let path = std::env::join_paths([
             std::path::PathBuf::from("/tmp/bin"),
             std::path::PathBuf::from("/usr/bin"),
         ])
         .expect("join path override");
 
-        configure_ccusage_command(&mut command, &args, Some(path.as_os_str()));
-
-        let configured_args: Vec<String> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().to_string())
-            .collect();
-        assert_eq!(configured_args, args);
+        configure_ccusage_command(&mut command, Some(path.as_os_str()));
 
         let configured_path = command
             .get_envs()
@@ -4504,9 +4497,8 @@ mod tests {
     #[test]
     fn configure_ccusage_command_skips_path_override_when_absent() {
         let mut command = std::process::Command::new("echo");
-        let args = vec!["daily".to_string()];
 
-        configure_ccusage_command(&mut command, &args, None);
+        configure_ccusage_command(&mut command, None);
 
         let has_path_override = command
             .get_envs()
@@ -4515,6 +4507,22 @@ mod tests {
             !has_path_override,
             "PATH should only be set when an override exists"
         );
+    }
+
+    #[test]
+    fn build_ccusage_command_applies_args() {
+        let args = vec!["daily".to_string(), "--json".to_string()];
+        let command = build_ccusage_command("npx", &args);
+        let collected: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        // On Windows the runner is launched through `cmd /C <program> <args>`;
+        // elsewhere the program is invoked directly with just the args.
+        #[cfg(windows)]
+        assert_eq!(collected, vec!["/C", "npx", "daily", "--json"]);
+        #[cfg(not(windows))]
+        assert_eq!(collected, args);
     }
 
     #[test]
