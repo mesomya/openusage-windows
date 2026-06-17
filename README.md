@@ -79,6 +79,10 @@ that are genuinely OS-specific were changed:
   bundling a C crypto library.
 - **No telemetry.** The upstream's anonymous analytics were removed from this
   fork.
+- **Antigravity sign-in.** Upstream embeds Google's Antigravity OAuth client
+  credentials in the plugin; this public fork does not republish that
+  third-party secret, so Antigravity sign-in needs those two values supplied in
+  a local build (copy them from upstream). Every other provider is unaffected.
 
 App Nap handling, the macOS activation policy, and other macOS-only code are
 compiled only on macOS, so they simply don't exist in the Windows build.
