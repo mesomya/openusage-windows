@@ -94,6 +94,7 @@ function App() {
     setAutoUpdateNextAt,
     handleRetryPlugin,
     handleRefreshAll,
+    hydrateFromCache,
   } = useProbe({
     pluginSettings,
     autoUpdateInterval,
@@ -131,6 +132,7 @@ function App() {
     setLoadingForPlugins,
     setErrorForPlugins,
     startBatch,
+    hydrateFromCache,
   })
 
   useSettingsTheme(themeMode)

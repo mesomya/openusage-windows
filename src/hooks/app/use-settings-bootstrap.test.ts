@@ -104,6 +104,7 @@ function createArgs() {
     setLoadingForPlugins: vi.fn(),
     setErrorForPlugins: vi.fn(),
     startBatch: vi.fn().mockResolvedValue(undefined),
+    hydrateFromCache: vi.fn(),
   }
 }
 
@@ -215,6 +216,40 @@ describe("useSettingsBootstrap", () => {
     })
 
     errorSpy.mockRestore()
+  })
+
+  it("hydrates cards from cached usage snapshots before the live probe", async () => {
+    const snapshots = [
+      {
+        providerId: "codex",
+        displayName: "Codex",
+        plan: "Team",
+        lines: [],
+        fetchedAt: "2026-06-17T00:00:00Z",
+      },
+    ]
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_cached_usage") return Promise.resolve(snapshots)
+      return Promise.resolve([
+        {
+          id: "codex",
+          name: "Codex",
+          iconUrl: "/codex.svg",
+          brandColor: "#000000",
+          lines: [],
+          primaryCandidates: [],
+        },
+      ])
+    })
+    const args = createArgs()
+
+    renderHook(() => useSettingsBootstrap(args))
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("get_cached_usage")
+      expect(args.hydrateFromCache).toHaveBeenCalledWith(snapshots)
+      expect(args.startBatch).toHaveBeenCalledWith(["codex"])
+    })
   })
 
   it("migrates windsurf settings before normalizing and saves the first-launch result", async () => {

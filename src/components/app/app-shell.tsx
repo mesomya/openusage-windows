@@ -66,17 +66,38 @@ export function AppShell({
   const appVersion = useAppVersion()
   const { updateStatus, triggerInstall, checkForUpdates } = useAppUpdate()
 
+  // On Windows the panel is a borderless window with no title bar, so it can get
+  // stuck partly off-screen with no way to move it. Expose a drag handle (the top
+  // bar + the transparent halo around the card) so it can be repositioned. The
+  // macOS build is an anchored NSPanel that must NOT be draggable, so this is
+  // gated to Windows. Tauri only drags the exact element carrying the attribute,
+  // so the sidebar icons, content and footer buttons stay clickable.
+  const isWindows =
+    typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
+  const dragRegionProps = isWindows ? { "data-tauri-drag-region": "" } : {}
+
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
       className="flex flex-col items-center p-6 pt-1.5 bg-transparent outline-none"
+      {...dragRegionProps}
     >
-      <div className="tray-arrow" />
+      <div className="tray-arrow" {...dragRegionProps} />
       <div
         className="relative bg-card rounded-xl overflow-hidden select-none w-full border shadow-lg flex flex-col"
         style={maxPanelHeightPx ? { maxHeight: `${maxPanelHeightPx - ARROW_OVERHEAD_PX}px` } : undefined}
       >
+        {isWindows && (
+          <div
+            {...dragRegionProps}
+            aria-hidden="true"
+            title="Drag to move"
+            className="flex h-4 w-full shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
+          >
+            <div {...dragRegionProps} className="h-1 w-8 rounded-full bg-border" />
+          </div>
+        )}
         <div className="flex flex-1 min-h-0 flex-row">
           <SideNav
             activeView={activeView}

@@ -251,6 +251,18 @@ pub fn flush_cache() {
     }
 }
 
+/// All cached provider snapshots, sorted by id. The frontend hydrates its cards
+/// from this when the panel opens, so a card that already has known-good data
+/// never flashes a transient live-probe error (e.g. a one-off network blip to a
+/// provider's API). The cache is persisted to disk and reloaded at startup, so
+/// this returns the last known values even on the first open after launch.
+pub fn cached_snapshots() -> Vec<CachedPluginSnapshot> {
+    let state = cache_state().lock().expect("cache state poisoned");
+    let mut snapshots: Vec<CachedPluginSnapshot> = state.snapshots.values().cloned().collect();
+    snapshots.sort_by(|a, b| a.provider_id.cmp(&b.provider_id));
+    snapshots
+}
+
 // ---------------------------------------------------------------------------
 // Settings reader (reads settings.json directly, not via tauri_plugin_store)
 // ---------------------------------------------------------------------------

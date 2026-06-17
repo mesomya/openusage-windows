@@ -893,15 +893,43 @@ fn inject_http<'js>(
                         &format!("invalid http method '{}': {}", method, e),
                     )
                 })?;
-                let mut builder = client.request(method, &req.url);
-                builder = builder.headers(header_map);
-                if let Some(body) = req.body_text {
-                    builder = builder.body(body);
-                }
-
-                let response = builder
-                    .send()
-                    .map_err(|e| Exception::throw_message(&ctx_inner, &e.to_string()))?;
+                // Send with a bounded retry on transient transport failures
+                // (connection drop / send error *before* any response). Provider
+                // APIs behind CDNs (e.g. chatgpt.com) intermittently reset a
+                // freshly opened connection — "error sending request for url" —
+                // and a quick retry recovers without surfacing a provider error.
+                // Only pre-response failures (is_connect/is_request) are retried,
+                // so a non-idempotent request is never double-submitted.
+                const MAX_HTTP_ATTEMPTS: u32 = 3;
+                let mut attempt = 0u32;
+                let response = loop {
+                    attempt += 1;
+                    let mut builder = client.request(method.clone(), &req.url);
+                    builder = builder.headers(header_map.clone());
+                    if let Some(body) = req.body_text.as_ref() {
+                        builder = builder.body(body.clone());
+                    }
+                    match builder.send() {
+                        Ok(resp) => break resp,
+                        Err(e) => {
+                            let transient = e.is_connect() || e.is_request();
+                            if attempt < MAX_HTTP_ATTEMPTS && transient && !deadline.has_elapsed() {
+                                log::warn!(
+                                    "[plugin:{}] HTTP {} {} transient send error (attempt {}/{}): {} — retrying",
+                                    pid,
+                                    method_str,
+                                    redacted_url,
+                                    attempt,
+                                    MAX_HTTP_ATTEMPTS,
+                                    e
+                                );
+                                std::thread::sleep(Duration::from_millis(250));
+                                continue;
+                            }
+                            return Err(Exception::throw_message(&ctx_inner, &e.to_string()));
+                        }
+                    }
+                };
 
                 let status = response.status().as_u16();
                 let mut resp_headers = std::collections::HashMap::new();

@@ -43,6 +43,17 @@ export type PluginOutput = {
   iconUrl: string
 }
 
+/** A cached snapshot returned by the `get_cached_usage` command. Mirrors the
+ * Rust `CachedPluginSnapshot` — the last successful probe per provider, used to
+ * hydrate cards on open so a transient live-probe failure never blanks them. */
+export type CachedUsageSnapshot = {
+  providerId: string
+  displayName: string
+  plan?: string
+  lines: MetricLine[]
+  fetchedAt: string
+}
+
 export type PluginMeta = {
   id: string
   name: string

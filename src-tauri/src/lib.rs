@@ -560,6 +560,15 @@ fn update_global_shortcut(
     Ok(())
 }
 
+/// Cached provider snapshots from the last successful probes (persisted to disk
+/// and kept fresh by the background refresh). The frontend hydrates its cards
+/// from this on open so a transient live-probe failure never blanks a card that
+/// already has known-good data.
+#[tauri::command]
+fn get_cached_usage() -> Vec<local_http_api::CachedPluginSnapshot> {
+    local_http_api::cached_snapshots()
+}
+
 #[tauri::command]
 fn list_plugins(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PluginMeta> {
     let plugins = {
@@ -680,6 +689,7 @@ pub fn run() {
             open_devtools,
             start_probe_batch,
             list_plugins,
+            get_cached_usage,
             get_log_path,
             update_global_shortcut
         ])

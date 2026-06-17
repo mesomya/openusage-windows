@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { PluginOutput } from "@/lib/plugin-types"
+import type { CachedUsageSnapshot, PluginOutput } from "@/lib/plugin-types"
 import type { PluginState } from "@/hooks/app/types"
 
 type UseProbeStateArgs = {
@@ -72,6 +72,40 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
     })
   }, [updatePluginStates])
 
+  // Seed cards from the Rust cache (last successful probes, persisted across
+  // restarts) when the panel opens, before the live refresh runs. This makes the
+  // panel show known-good data immediately, and — combined with handleProbeResult
+  // keeping existing data on error — means a transient probe failure never blanks
+  // a card. Only seeds providers that have no live data/loading state yet.
+  const hydrateFromCache = useCallback(
+    (snapshots: CachedUsageSnapshot[]) => {
+      if (!snapshots.length) return
+      updatePluginStates((prev) => {
+        const next = { ...prev }
+        for (const snap of snapshots) {
+          const existing = prev[snap.providerId]
+          if (existing?.data || existing?.loading) continue
+          const fetchedMs = Date.parse(snap.fetchedAt)
+          next[snap.providerId] = {
+            data: {
+              providerId: snap.providerId,
+              displayName: snap.displayName,
+              plan: snap.plan,
+              lines: snap.lines,
+              iconUrl: "",
+            },
+            loading: false,
+            error: null,
+            lastManualRefreshAt: existing?.lastManualRefreshAt ?? null,
+            lastUpdatedAt: Number.isFinite(fetchedMs) ? fetchedMs : null,
+          }
+        }
+        return next
+      })
+    },
+    [updatePluginStates]
+  )
+
   const handleProbeResult = useCallback(
     (output: PluginOutput) => {
       const errorMessage = getErrorMessage(output)
@@ -109,5 +143,6 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
     setLoadingForPlugins,
     setErrorForPlugins,
     handleProbeResult,
+    hydrateFromCache,
   }
 }

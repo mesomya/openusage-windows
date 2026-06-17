@@ -5,7 +5,7 @@ import {
   enable as enableAutostart,
   isEnabled as isAutostartEnabled,
 } from "@tauri-apps/plugin-autostart"
-import type { PluginMeta } from "@/lib/plugin-types"
+import type { CachedUsageSnapshot, PluginMeta } from "@/lib/plugin-types"
 import {
   arePluginSettingsEqual,
   DEFAULT_AUTO_UPDATE_INTERVAL,
@@ -58,6 +58,7 @@ type UseSettingsBootstrapArgs = {
   setLoadingForPlugins: (ids: string[]) => void
   setErrorForPlugins: (ids: string[], error: string) => void
   startBatch: (pluginIds?: string[]) => Promise<string[] | undefined>
+  hydrateFromCache: (snapshots: CachedUsageSnapshot[]) => void
 }
 
 export function useSettingsBootstrap({
@@ -75,6 +76,7 @@ export function useSettingsBootstrap({
   setLoadingForPlugins,
   setErrorForPlugins,
   startBatch,
+  hydrateFromCache,
 }: UseSettingsBootstrapArgs) {
   const applyStartOnLogin = useCallback(async (value: boolean) => {
     if (!isTauri()) return
@@ -190,6 +192,16 @@ export function useSettingsBootstrap({
           setStartOnLogin(storedStartOnLogin)
           setMenubarIconStyle(storedMenubarIconStyle)
           setMenubarMetric(storedMenubarMetric)
+
+          // Seed cards from the persisted cache before the live refresh so the
+          // panel shows the last known-good data instantly, and a transient
+          // probe failure never blanks a card that already has data.
+          try {
+            const cached = await invoke<CachedUsageSnapshot[]>("get_cached_usage")
+            if (isMounted) hydrateFromCache(cached)
+          } catch (error) {
+            console.error("Failed to hydrate usage from cache:", error)
+          }
 
           const enabledIds = getEnabledPluginIds(normalized)
           setLoadingForPlugins(enabledIds)
