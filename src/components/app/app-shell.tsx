@@ -1,3 +1,6 @@
+import { useEffect, useRef } from "react"
+import { getCurrentWindow } from "@tauri-apps/api/window"
+import { PhysicalPosition } from "@tauri-apps/api/dpi"
 import { useShallow } from "zustand/react/shallow"
 import { AppContent, type AppContentActionProps } from "@/components/app/app-content"
 import { PanelFooter } from "@/components/panel-footer"
@@ -67,35 +70,77 @@ export function AppShell({
   const { updateStatus, triggerInstall, checkForUpdates } = useAppUpdate()
 
   // On Windows the panel is a borderless window with no title bar, so it can get
-  // stuck partly off-screen with no way to move it. Expose a drag handle (the top
-  // bar + the transparent halo around the card) so it can be repositioned. The
-  // macOS build is an anchored NSPanel that must NOT be draggable, so this is
-  // gated to Windows. Tauri only drags the exact element carrying the attribute,
-  // so the sidebar icons, content and footer buttons stay clickable.
+  // stuck partly off-screen with no way to move it. Give it a drag handle (the top
+  // bar). We move the window ourselves with setPosition rather than the OS drag
+  // loop (start_dragging): start_dragging briefly drops focus, which the panel's
+  // hide-on-blur turns into an instant disappear the moment you grab it.
+  // setPosition keeps focus (SWP_NOACTIVATE), so the panel stays put while moving.
+  // Gated to Windows — the macOS build is an anchored NSPanel and must not move.
   const isWindows =
     typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
-  const dragRegionProps = isWindows ? { "data-tauri-drag-region": "" } : {}
+
+  const dragCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => dragCleanupRef.current?.(), [])
+
+  const handlePanelDragStart = async (e: React.MouseEvent) => {
+    if (!isWindows || e.button !== 0) return
+    e.preventDefault()
+    const appWindow = getCurrentWindow()
+    const dpr = window.devicePixelRatio || 1
+    const startCx = e.screenX
+    const startCy = e.screenY
+    let origin: { x: number; y: number }
+    try {
+      origin = await appWindow.outerPosition()
+    } catch {
+      return
+    }
+
+    let rafId: number | null = null
+    let lastCx = startCx
+    let lastCy = startCy
+    const applyMove = () => {
+      rafId = null
+      const dx = Math.round((lastCx - startCx) * dpr)
+      const dy = Math.round((lastCy - startCy) * dpr)
+      void appWindow.setPosition(new PhysicalPosition(origin.x + dx, origin.y + dy)).catch(() => {})
+    }
+    const onMove = (ev: MouseEvent) => {
+      lastCx = ev.screenX
+      lastCy = ev.screenY
+      if (rafId == null) rafId = requestAnimationFrame(applyMove)
+    }
+    const cleanup = () => {
+      if (rafId != null) cancelAnimationFrame(rafId)
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", cleanup)
+      dragCleanupRef.current = null
+    }
+    dragCleanupRef.current?.()
+    dragCleanupRef.current = cleanup
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", cleanup)
+  }
 
   return (
     <div
       ref={containerRef}
       tabIndex={-1}
       className="flex flex-col items-center p-6 pt-1.5 bg-transparent outline-none"
-      {...dragRegionProps}
     >
-      <div className="tray-arrow" {...dragRegionProps} />
+      <div className="tray-arrow" />
       <div
         className="relative bg-card rounded-xl overflow-hidden select-none w-full border shadow-lg flex flex-col"
         style={maxPanelHeightPx ? { maxHeight: `${maxPanelHeightPx - ARROW_OVERHEAD_PX}px` } : undefined}
       >
         {isWindows && (
           <div
-            {...dragRegionProps}
+            onMouseDown={handlePanelDragStart}
             aria-hidden="true"
             title="Drag to move"
-            className="flex h-4 w-full shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
+            className="flex h-5 w-full shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
           >
-            <div {...dragRegionProps} className="h-1 w-8 rounded-full bg-border" />
+            <div className="pointer-events-none h-1 w-8 rounded-full bg-border" />
           </div>
         )}
         <div className="flex flex-1 min-h-0 flex-row">
