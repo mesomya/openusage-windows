@@ -1,6 +1,6 @@
 [package]
 name = "openusage"
-version = "0.6.32"
+version = "0.6.33"
 description = "OpenUsage is an open source AI subscription limit tracker"
 authors = ["mesomya"]
 edition = "2024"
@@ -50,6 +50,7 @@ tauri-plugin-updater = { version = "2", default-features = false, features = ["n
 tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2.5.1"
+tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 regex-lite = "0.1.9"
 aes-gcm = "0.10.3"

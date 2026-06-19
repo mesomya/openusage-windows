@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import { PhysicalPosition } from "@tauri-apps/api/dpi"
+import { LogicalPosition } from "@tauri-apps/api/dpi"
 import { useShallow } from "zustand/react/shallow"
 import { AppContent, type AppContentActionProps } from "@/components/app/app-content"
 import { PanelFooter } from "@/components/panel-footer"
@@ -86,12 +86,19 @@ export function AppShell({
     if (!isWindows || e.button !== 0) return
     e.preventDefault()
     const appWindow = getCurrentWindow()
-    const dpr = window.devicePixelRatio || 1
+    // CSS screen coords (e.screenX/Y) are logical pixels, the same unit as Tauri's
+    // LogicalPosition. Work entirely in logical space and let Tauri convert to
+    // physical per the monitor the window currently sits on — so dragging across
+    // monitors with different DPI scale factors stays correct (no stale dpr).
     const startCx = e.screenX
     const startCy = e.screenY
-    let origin: { x: number; y: number }
+    let originX: number
+    let originY: number
     try {
-      origin = await appWindow.outerPosition()
+      const scale = await appWindow.scaleFactor()
+      const phys = await appWindow.outerPosition()
+      originX = phys.x / scale
+      originY = phys.y / scale
     } catch {
       return
     }
@@ -101,9 +108,9 @@ export function AppShell({
     let lastCy = startCy
     const applyMove = () => {
       rafId = null
-      const dx = Math.round((lastCx - startCx) * dpr)
-      const dy = Math.round((lastCy - startCy) * dpr)
-      void appWindow.setPosition(new PhysicalPosition(origin.x + dx, origin.y + dy)).catch(() => {})
+      const x = originX + (lastCx - startCx)
+      const y = originY + (lastCy - startCy)
+      void appWindow.setPosition(new LogicalPosition(x, y)).catch(() => {})
     }
     const onMove = (ev: MouseEvent) => {
       lastCx = ev.screenX

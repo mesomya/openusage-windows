@@ -1,9 +1,36 @@
 (function () {
   var LS_SERVICE = "exa.language_server_pb.LanguageServerService"
-  var STATE_DBS = [
-    "~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb",
-    "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb",
-  ]
+  // Antigravity (VS Code-derived) stores its state DB per-OS; the host expands "~".
+  // Try the renamed "Antigravity IDE" (v2) folder before the legacy "Antigravity".
+  function stateDbPaths(platform) {
+    if (platform === "windows") {
+      return [
+        "~/AppData/Roaming/Antigravity IDE/User/globalStorage/state.vscdb",
+        "~/AppData/Roaming/Antigravity/User/globalStorage/state.vscdb",
+      ]
+    }
+    if (platform === "linux") {
+      return [
+        "~/.config/Antigravity IDE/User/globalStorage/state.vscdb",
+        "~/.config/Antigravity/User/globalStorage/state.vscdb",
+      ]
+    }
+    if (platform === "macos") {
+      return [
+        "~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb",
+        "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb",
+      ]
+    }
+    // unknown: probe all known platforms
+    return [
+      "~/Library/Application Support/Antigravity IDE/User/globalStorage/state.vscdb",
+      "~/Library/Application Support/Antigravity/User/globalStorage/state.vscdb",
+      "~/AppData/Roaming/Antigravity IDE/User/globalStorage/state.vscdb",
+      "~/AppData/Roaming/Antigravity/User/globalStorage/state.vscdb",
+      "~/.config/Antigravity IDE/User/globalStorage/state.vscdb",
+      "~/.config/Antigravity/User/globalStorage/state.vscdb",
+    ]
+  }
   var AGY_KEYCHAIN_SERVICE = "gemini"
   var AGY_KEYCHAIN_ACCOUNT = "antigravity"
   var CLOUD_CODE_URLS = [
@@ -134,8 +161,9 @@
 
   function loadOAuthTokenCandidates(ctx) {
     var candidates = []
-    for (var i = 0; i < STATE_DBS.length; i++) {
-      var tokens = loadOAuthTokensFromDb(ctx, STATE_DBS[i])
+    var dbs = stateDbPaths(ctx.app && ctx.app.platform)
+    for (var i = 0; i < dbs.length; i++) {
+      var tokens = loadOAuthTokensFromDb(ctx, dbs[i])
       if (tokens) candidates.push(tokens)
     }
     return candidates

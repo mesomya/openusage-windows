@@ -390,6 +390,12 @@
   }
 
   function probe(ctx) {
+    // This provider authenticates by reading the macOS Perplexity desktop app's
+    // local cache (CFURL Cache.db + Apple bplist). There is no native Perplexity
+    // app or equivalent credential store on Windows/Linux, so gate to macOS.
+    if (ctx.app && ctx.app.platform !== "macos") {
+      throw "Only available on macOS (no native Perplexity desktop app on this OS)."
+    }
     const session = loadLocalSession(ctx)
     if (!session) throw "Not logged in. Sign in via Perplexity app."
     if (session.sourcePath) ctx.host.log.info("using cache db: " + session.sourcePath)

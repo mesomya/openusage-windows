@@ -154,10 +154,18 @@ fn route(method: &str, path: &str) -> String {
 }
 
 fn handle_get_usage_collection() -> String {
-    let snapshots = {
+    // Snapshot the cache state under the lock, then release it BEFORE the
+    // settings.json disk read inside enabled_snapshots_ordered, so external
+    // polling of GET /v1/usage never blocks probe-result writers on disk IO.
+    let (app_data_dir, known_ids, snapshots_map) = {
         let state = cache_state().lock().expect("cache state poisoned");
-        enabled_snapshots_ordered(&state)
+        (
+            state.app_data_dir.clone(),
+            state.known_plugin_ids.clone(),
+            state.snapshots.clone(),
+        )
     };
+    let snapshots = enabled_snapshots_ordered(&app_data_dir, &known_ids, &snapshots_map);
     let body = serde_json::to_string(&snapshots).unwrap_or_else(|_| "[]".to_string());
     response_json(200, "OK", &body)
 }

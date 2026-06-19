@@ -90,8 +90,26 @@
     return null;
   }
 
+  function loadTokenFromEnv(ctx) {
+    try {
+      const token =
+        ctx.host.env.get("GH_TOKEN") || ctx.host.env.get("GITHUB_TOKEN");
+      if (token && String(token).trim()) {
+        ctx.host.log.info("token loaded from GH_TOKEN/GITHUB_TOKEN env");
+        return { token: String(token).trim(), source: "env" };
+      }
+    } catch (e) {
+      ctx.host.log.info("env token read failed: " + String(e));
+    }
+    return null;
+  }
+
   function loadToken(ctx) {
+    // env first (explicit), then OpenUsage keychain, gh CLI keychain (macOS),
+    // then the plugin's own state file. On Windows where gh stores its token in
+    // Credential Manager, GH_TOKEN/GITHUB_TOKEN is the supported path today.
     return (
+      loadTokenFromEnv(ctx) ||
       loadTokenFromKeychain(ctx) ||
       loadTokenFromGhCli(ctx) ||
       loadTokenFromStateFile(ctx)

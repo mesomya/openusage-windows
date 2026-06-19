@@ -23,24 +23,21 @@ vi.mock("@/hooks/use-changelog", () => ({
 }))
 
 describe("AboutDialog", () => {
-  it("renders version, links, and maintainers", () => {
+  it("renders version and the source link", () => {
     render(<AboutDialog version="1.2.3" onClose={() => {}} />)
     expect(screen.getByText("OpenUsage")).toBeInTheDocument()
     expect(screen.getByText("v1.2.3")).toBeInTheDocument()
-    expect(screen.getByText("GitHub")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "validatedev" })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "davidarny" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "GitHub" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "View Changelog" })).toBeInTheDocument()
   })
 
-  it("opens maintainer GitHub profiles on click", async () => {
+  it("opens the fork's GitHub repo on click", async () => {
     render(<AboutDialog version="1.2.3" onClose={() => {}} />)
 
-    await userEvent.click(screen.getByRole("button", { name: "validatedev" }))
-    expect(openerState.openUrlMock).toHaveBeenCalledWith("https://github.com/validatedev")
-
-    openerState.openUrlMock.mockClear()
-    await userEvent.click(screen.getByRole("button", { name: "davidarny" }))
-    expect(openerState.openUrlMock).toHaveBeenCalledWith("https://github.com/davidarny")
+    await userEvent.click(screen.getByRole("button", { name: "GitHub" }))
+    expect(openerState.openUrlMock).toHaveBeenCalledWith(
+      "https://github.com/mesomya/openusage-windows"
+    )
   })
 
   it("closes on Escape", async () => {

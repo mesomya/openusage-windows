@@ -189,6 +189,11 @@ fn refresh_enabled_providers(app_handle: &tauri::AppHandle) {
     let known_ids: Vec<String> = plugins.iter().map(|p| p.manifest.id.clone()).collect();
     let enabled = local_http_api::enabled_plugin_ids(&app_data_dir, &known_ids);
     if enabled.is_empty() {
+        // Reset the tooltip so it doesn't keep showing a stale provider summary
+        // after the user disables every provider.
+        if let Some(tray) = app_handle.tray_by_id("tray") {
+            let _ = tray.set_tooltip(Some("OpenUsage"));
+        }
         return;
     }
 
@@ -654,6 +659,13 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
+        // Registered FIRST: a second launch (autostart + manual, updater
+        // relaunch, double-click) hands off to the running instance — surfacing
+        // its panel and exiting — instead of spawning a duplicate tray icon,
+        // background-refresh loop, probe set, and shortcut registration.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            panel::show_panel(app);
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -778,6 +790,41 @@ pub fn run() {
                     *managed_shortcut = Some(shortcut);
                 } else {
                     log::warn!("Failed to store managed shortcut in memory");
+                }
+            }
+
+            // Windows: reconcile the autostart registry entry with the stored
+            // "start on login" preference at startup. The JS path only runs when
+            // the panel (webview) is first opened — a hidden WebView2 window's
+            // scripts are suspended — so without this a user who enables it and
+            // never opens the panel, or who changes it out-of-band via Windows
+            // Settings, would have a registry state that doesn't match the setting.
+            #[cfg(target_os = "windows")]
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                use tauri_plugin_store::StoreExt;
+                let want_autostart = app
+                    .handle()
+                    .store("settings.json")
+                    .ok()
+                    .and_then(|store| store.get("startOnLogin"))
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                let manager = app.autolaunch();
+                match manager.is_enabled() {
+                    Ok(is_enabled) if is_enabled != want_autostart => {
+                        let result = if want_autostart {
+                            manager.enable()
+                        } else {
+                            manager.disable()
+                        };
+                        match result {
+                            Ok(()) => log::info!("autostart reconciled to {}", want_autostart),
+                            Err(e) => log::warn!("autostart reconcile failed: {}", e),
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("autostart is_enabled check failed: {}", e),
                 }
             }
 

@@ -2,10 +2,28 @@ use crate::plugin_engine::host_api;
 use crate::plugin_engine::manifest::LoadedPlugin;
 use rquickjs::{Array, Context, Ctx, Error, Object, Promise, Runtime, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const PROBE_TIMEOUT_SECS: u64 = 30;
+
+/// Per-provider probe lock. Both probe drivers — the Rust background-refresh loop
+/// and the frontend's `start_probe_batch` workers — funnel through `run_probe`,
+/// so serializing per provider here prevents two concurrent probes of the SAME
+/// provider from each POSTing the same single-use OAuth refresh token (rotating
+/// providers like Codex reject the second as reused) or racing the auth-file
+/// write-back. Keyed per id so different providers still probe in parallel.
+fn probe_lock_for(id: &str) -> Arc<Mutex<()>> {
+    static PROBE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let map = PROBE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|p| p.into_inner());
+    guard
+        .entry(id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -70,6 +88,10 @@ pub struct PluginOutput {
 }
 
 pub fn run_probe(plugin: &LoadedPlugin, app_data_dir: &PathBuf, app_version: &str) -> PluginOutput {
+    // Serialize concurrent probes of the same provider (background loop vs panel
+    // batch) so token-rotating providers can't double-refresh / race the write.
+    let lock = probe_lock_for(&plugin.manifest.id);
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
     run_probe_with_timeout(
         plugin,
         app_data_dir,

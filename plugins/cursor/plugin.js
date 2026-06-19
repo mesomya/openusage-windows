@@ -1,6 +1,15 @@
 (function () {
-  const STATE_DB =
-    "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+  // Cursor stores its VS Code-style state DB per-OS. The host expands "~".
+  function stateDbPath(ctx) {
+    var platform = ctx.app && ctx.app.platform
+    if (platform === "windows") {
+      return "~/AppData/Roaming/Cursor/User/globalStorage/state.vscdb"
+    }
+    if (platform === "linux") {
+      return "~/.config/Cursor/User/globalStorage/state.vscdb"
+    }
+    return "~/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
+  }
   const KEYCHAIN_ACCESS_TOKEN_SERVICE = "cursor-access-token"
   const KEYCHAIN_REFRESH_TOKEN_SERVICE = "cursor-refresh-token"
   const BASE_URL = "https://api2.cursor.sh"
@@ -15,6 +24,7 @@
   const LOGIN_HINT = "Sign in via Cursor app or run `agent login`."
 
   function readStateValue(ctx, key) {
+    const STATE_DB = stateDbPath(ctx)
     try {
       const sql =
         "SELECT value FROM ItemTable WHERE key = '" + key + "' LIMIT 1;"
@@ -33,6 +43,7 @@
   }
 
   function writeStateValue(ctx, key, value) {
+    const STATE_DB = stateDbPath(ctx)
     try {
       // Escape single quotes in value for SQL
       const escaped = String(value).replace(/'/g, "''")

@@ -30,10 +30,15 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
   )
 
   const getErrorMessage = useCallback((output: PluginOutput) => {
-    if (output.lines.length !== 1) return null
-    const line = output.lines[0]
-    if (line.type === "badge" && line.label === "Error") {
-      return line.text || "Couldn't update data. Try again?"
+    // Treat an Error badge ANYWHERE in the output as an error (matching the
+    // backend's .any() semantics), not only when it's the sole line — otherwise
+    // a probe that emits an error alongside other lines looks like a fresh
+    // success and shows a misleading "just updated" timestamp.
+    const errorLine = output.lines.find(
+      (line) => line.type === "badge" && line.label === "Error"
+    )
+    if (errorLine && errorLine.type === "badge") {
+      return errorLine.text || "Couldn't update data. Try again?"
     }
     return null
   }, [])
@@ -79,7 +84,7 @@ export function useProbeState({ onProbeResult }: UseProbeStateArgs) {
   // a card. Only seeds providers that have no live data/loading state yet.
   const hydrateFromCache = useCallback(
     (snapshots: CachedUsageSnapshot[]) => {
-      if (!snapshots.length) return
+      if (!Array.isArray(snapshots) || !snapshots.length) return
       updatePluginStates((prev) => {
         const next = { ...prev }
         for (const snap of snapshots) {

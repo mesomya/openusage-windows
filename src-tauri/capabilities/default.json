@@ -21,6 +21,7 @@
     "global-shortcut:default",
     "autostart:default",
     "clipboard-manager:allow-write-text",
-    "core:menu:default"
+    "core:menu:default",
+    "log:default"
   ]
 }

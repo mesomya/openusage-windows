@@ -345,10 +345,13 @@ mod other {
     const PANEL_GAP: f64 = 8.0;
 
     fn now_ms() -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0)
+        // Monotonic clock for the reopen/drag guards: a backward wall-clock jump
+        // (NTP step, manual change, VM/sleep resume) must not wedge the tray
+        // toggle by making the guard window appear arbitrarily long.
+        use std::sync::OnceLock;
+        use std::time::Instant;
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        EPOCH.get_or_init(Instant::now).elapsed().as_millis() as i64
     }
 
     /// The window is fixed-size and non-resizable, so its logical size always

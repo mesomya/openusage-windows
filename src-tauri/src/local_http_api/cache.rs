@@ -300,8 +300,14 @@ fn read_plugin_settings(app_data_dir: &Path) -> (Vec<String>, HashSet<String>, b
 }
 
 /// Build the ordered list of enabled cached snapshots for GET /v1/usage.
-pub(super) fn enabled_snapshots_ordered(state: &CacheState) -> Vec<CachedPluginSnapshot> {
-    let (settings_order, disabled, has_settings) = read_plugin_settings(&state.app_data_dir);
+pub(super) fn enabled_snapshots_ordered(
+    app_data_dir: &Path,
+    known_plugin_ids: &[String],
+    snapshots: &HashMap<String, CachedPluginSnapshot>,
+) -> Vec<CachedPluginSnapshot> {
+    // Note: callers pass cloned data and invoke this AFTER releasing the cache
+    // lock, so the settings.json disk read below never blocks probe writers.
+    let (settings_order, disabled, has_settings) = read_plugin_settings(app_data_dir);
 
     let default_enabled: HashSet<&str> = DEFAULT_ENABLED_PLUGINS.iter().copied().collect();
 
@@ -321,7 +327,7 @@ pub(super) fn enabled_snapshots_ordered(state: &CacheState) -> Vec<CachedPluginS
             ordered.push(id.clone());
         }
     }
-    for id in &state.known_plugin_ids {
+    for id in known_plugin_ids {
         if seen.insert(id.clone()) {
             ordered.push(id.clone());
         }
@@ -330,7 +336,7 @@ pub(super) fn enabled_snapshots_ordered(state: &CacheState) -> Vec<CachedPluginS
     ordered
         .into_iter()
         .filter(|id| is_enabled(id))
-        .filter_map(|id| state.snapshots.get(&id).cloned())
+        .filter_map(|id| snapshots.get(&id).cloned())
         .collect()
 }
 

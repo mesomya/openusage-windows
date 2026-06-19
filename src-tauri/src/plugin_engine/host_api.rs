@@ -13,7 +13,7 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const WHITELISTED_ENV_VARS: [&str; 16] = [
+const WHITELISTED_ENV_VARS: [&str; 19] = [
     "CODEX_HOME",
     "CLAUDE_CONFIG_DIR",
     "CLAUDE_CODE_OAUTH_TOKEN",
@@ -30,6 +30,11 @@ const WHITELISTED_ENV_VARS: [&str; 16] = [
     "MINIMAX_CN_API_KEY",
     "SYNTHETIC_API_KEY",
     "PI_CODING_AGENT_DIR",
+    // GitHub CLI / Copilot token sources (the supported path on Windows, where
+    // gh stores its token in the Credential Manager rather than a readable file).
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_CONFIG_DIR",
 ];
 const MIN_BLOCKING_TIMEOUT: Duration = Duration::from_millis(1);
 
@@ -2386,7 +2391,22 @@ fn kill_ccusage_on_timeout(child: &mut std::process::Child) -> std::io::Result<(
 
     #[cfg(not(unix))]
     {
-        child.kill()
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // Windows does not cascade-kill children. child.id() is the cmd.exe PID;
+        // the real workers (node/bunx/npx) are its descendants and would leak if
+        // we only killed cmd.exe. taskkill /T walks the tree and /F force-kills it.
+        let killed = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match killed {
+            Ok(status) if status.success() => Ok(()),
+            // PID already gone, or taskkill unavailable — at least kill cmd.exe.
+            _ => child.kill(),
+        }
     }
 }
 

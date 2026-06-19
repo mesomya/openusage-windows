@@ -2,17 +2,27 @@
   var CLOUD_SERVICE = "exa.seat_management_pb.SeatManagementService"
   var DEFAULT_API_SERVER_URL = "https://server.codeium.com"
   var CLOUD_COMPAT_VERSION = "1.108.2"
-  var CREDENTIALS_PATH = "~/.local/share/devin/credentials.toml"
-  var APP_AUTH_SOURCES = [
-    {
-      source: "Devin app",
-      stateDb: "~/Library/Application Support/Devin/User/globalStorage/state.vscdb",
-    },
-    {
-      source: "Devin - Next app",
-      stateDb: "~/Library/Application Support/Devin - Next/User/globalStorage/state.vscdb",
-    },
-  ]
+  // Devin CLI + app store credentials per-OS; the host expands "~".
+  function credentialsPaths(ctx) {
+    var platform = ctx.app && ctx.app.platform
+    if (platform === "windows") return ["~/AppData/Roaming/devin/credentials.toml"]
+    if (platform === "macos" || platform === "linux") return ["~/.local/share/devin/credentials.toml"]
+    return ["~/AppData/Roaming/devin/credentials.toml", "~/.local/share/devin/credentials.toml"]
+  }
+  function appAuthSources(ctx) {
+    var platform = ctx.app && ctx.app.platform
+    var bases
+    if (platform === "windows") bases = ["~/AppData/Roaming"]
+    else if (platform === "linux") bases = ["~/.config"]
+    else if (platform === "macos") bases = ["~/Library/Application Support"]
+    else bases = ["~/Library/Application Support", "~/AppData/Roaming", "~/.config"]
+    var sources = []
+    for (var i = 0; i < bases.length; i++) {
+      sources.push({ source: "Devin app", stateDb: bases[i] + "/Devin/User/globalStorage/state.vscdb" })
+      sources.push({ source: "Devin - Next app", stateDb: bases[i] + "/Devin - Next/User/globalStorage/state.vscdb" })
+    }
+    return sources
+  }
   var LOGIN_HINT = "Run devin auth login or sign in to Devin and try again."
   var QUOTA_HINT = "Devin quota data unavailable. Try again later."
   var DAY_MS = 24 * 60 * 60 * 1000
@@ -118,9 +128,14 @@
   }
 
   function loadCredentialsFile(ctx) {
-    if (!ctx.host.fs.exists(CREDENTIALS_PATH)) return null
+    var credPath = null
+    var paths = credentialsPaths(ctx)
+    for (var p = 0; p < paths.length; p++) {
+      if (ctx.host.fs.exists(paths[p])) { credPath = paths[p]; break }
+    }
+    if (!credPath) return null
     try {
-      var text = ctx.host.fs.readText(CREDENTIALS_PATH)
+      var text = ctx.host.fs.readText(credPath)
       var apiKey = readTomlString(text, "windsurf_api_key")
       if (!apiKey) {
         ctx.host.log.warn("Devin credentials missing windsurf_api_key")
@@ -302,8 +317,9 @@
     // hasn't already rejected, so a stale token in one install doesn't mask a
     // valid one in another. Read each state DB only when we reach it, so a working
     // earlier source short-circuits before we touch a later install's DB.
-    for (var i = 0; i < APP_AUTH_SOURCES.length; i++) {
-      var appAuth = readAppAuth(ctx, APP_AUTH_SOURCES[i])
+    var appSources = appAuthSources(ctx)
+    for (var i = 0; i < appSources.length; i++) {
+      var appAuth = readAppAuth(ctx, appSources[i])
       if (!appAuth) continue
       if (alreadyAttempted(attempts, appAuth)) continue
       sawApiKey = true

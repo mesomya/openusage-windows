@@ -668,12 +668,12 @@ describe("App", () => {
 
     // Open about via version button in footer
     await userEvent.click(await screen.findByRole("button", { name: /OpenUsage/i }))
-    await screen.findByText("Built by")
+    await screen.findByText(/Open source on/)
 
     // Close about via ESC key
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))
     await waitFor(() => {
-      expect(screen.queryByText("Built by")).not.toBeInTheDocument()
+      expect(screen.queryByText(/Open source on/)).not.toBeInTheDocument()
     })
   })
 

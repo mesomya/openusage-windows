@@ -8,7 +8,9 @@ export const makeCtx = () => {
     nowIso: "2026-02-02T00:00:00.000Z",
     app: {
       version: "0.0.0",
-      platform: "darwin",
+      // Matches the runtime value: the host sets ctx.app.platform to
+      // std::env::consts::OS, which is "macos" on macOS (never "darwin").
+      platform: "macos",
       appDataDir: "/tmp/openusage-test",
       pluginDataDir: "/tmp/openusage-test/plugin",
     },
