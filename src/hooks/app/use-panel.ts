@@ -121,7 +121,13 @@ export function usePanel({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return
-      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+      // Primary modifier is Cmd (Meta) on macOS but Ctrl on Windows/Linux —
+      // Win+Arrow is reserved by Windows for window snapping, so never use Meta there.
+      const onWindows =
+        typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
+      const primaryPressed = onWindows ? event.ctrlKey : event.metaKey
+      const conflictModifier = onWindows ? event.metaKey : event.ctrlKey
+      if (!primaryPressed || conflictModifier || event.altKey || event.shiftKey) return
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return
       if (isEditableTarget(event.target)) return
 

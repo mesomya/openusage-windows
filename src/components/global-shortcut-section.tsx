@@ -3,15 +3,22 @@ import { X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { GlobalShortcut } from "@/lib/settings"
 
-// Convert internal shortcut format to display format
-// e.g., "CommandOrControl+Shift+U" -> "Cmd + Shift + U"
+// The primary modifier and Alt are named differently per platform: on Windows
+// CommandOrControl is Ctrl (not Cmd) and Alt is "Alt" (not the macOS "Opt").
+const isWindows =
+  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
+const PRIMARY_MOD = isWindows ? "Ctrl" : "Cmd"
+const ALT_MOD = isWindows ? "Alt" : "Opt"
+
+// Convert internal shortcut format to display format, e.g.
+// "CommandOrControl+Shift+U" -> "Ctrl + Shift + U" on Windows, "Cmd + Shift + U" on macOS.
 function formatShortcutForDisplay(shortcut: string): string {
   return shortcut
-    .replace(/CommandOrControl/g, "Cmd")
+    .replace(/CommandOrControl/g, PRIMARY_MOD)
     .replace(/Command/g, "Cmd")
     .replace(/Control/g, "Ctrl")
-    .replace(/Option/g, "Opt")
-    .replace(/Alt/g, "Opt")
+    .replace(/Option/g, ALT_MOD)
+    .replace(/Alt/g, ALT_MOD)
     .replace(/\+/g, " + ")
 }
 
@@ -107,12 +114,12 @@ function buildShortcutFromCodes(codes: Set<string>): { display: string; tauri: s
       if (normalized === "Meta" || normalized === "Control") {
         if (!modifiers.includes("CommandOrControl")) {
           modifiers.push("CommandOrControl")
-          displayMods.push("Cmd")
+          displayMods.push(PRIMARY_MOD)
         }
       } else if (normalized === "Alt") {
         if (!modifiers.includes("Alt")) {
           modifiers.push("Alt")
-          displayMods.push("Opt")
+          displayMods.push(ALT_MOD)
         }
       } else if (normalized === "Shift") {
         if (!modifiers.includes("Shift")) {
