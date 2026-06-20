@@ -43,4 +43,7 @@ jobs:
 
       - name: Rust tests
         working-directory: src-tauri
-        run: cargo test
+        # Several tests read/mutate real process env vars (env-allowlist, auth
+        # token resolution), so they must run serially — parallel runs race on
+        # shared env state (e.g. ZAI_API_KEY). Matches the documented command.
+        run: cargo test -- --test-threads=1
