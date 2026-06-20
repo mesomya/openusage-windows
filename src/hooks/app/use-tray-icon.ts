@@ -157,15 +157,20 @@ export function useTrayIcon({
         return Promise.resolve()
       }
 
+      // Windows tray icons are full-color app logos (not menu-bar templates).
+      // setIconAsTemplate(true) forces a monochrome black silhouette there, and
+      // the per-provider in-icon metric only refreshes while the panel is open,
+      // so on Windows we keep the static color OpenUsage logo (set by Rust at
+      // tray creation) and only update the hover tooltip below.
+      const isWindows =
+        typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
       const restoreGaugeIcon = () => {
         const gaugePath = trayGaugeIconPathRef.current
         if (gaugePath) {
-          Promise.all([
-            tray.setIcon(gaugePath),
-            tray.setIconAsTemplate(true),
-            setTrayTitle(""),
-            setTrayTooltip("OpenUsage"),
-          ])
+          const ops: Promise<unknown>[] = [tray.setIcon(gaugePath)]
+          if (!isWindows) ops.push(tray.setIconAsTemplate(true))
+          ops.push(setTrayTitle(""), setTrayTooltip("OpenUsage"))
+          Promise.all(ops)
             .catch((e) => {
               console.error("Failed to restore tray gauge icon:", e)
             })
@@ -256,6 +261,19 @@ export function useTrayIcon({
       })
       const tooltip = formatTrayTooltip(tooltipBars, pluginsMetaRef.current, preferWeekly)
       const updateTooltip = () => setTrayTooltip(tooltip)
+
+      if (isWindows) {
+        // Leave the static full-color OpenUsage tray icon in place; only the
+        // hover tooltip carries the live usage on Windows.
+        updateTooltip()
+          .catch((e) => {
+            console.error("Failed to update tray tooltip:", e)
+          })
+          .finally(() => {
+            finalizeUpdate()
+          })
+        return
+      }
 
       if (style === "bars") {
         renderTrayBarsIcon({
