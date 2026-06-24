@@ -38,7 +38,7 @@ rquickjs = { version = "0.12", features = [] }
 # Embedded SQLite. Replaces the macOS `sqlite3` CLI shell-out so provider
 # plugins that read SQLite databases (Cursor, Kiro, Antigravity, ...) work on
 # every platform with no external binary. `bundled` compiles SQLite from source.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 tauri-plugin-store = "2.4.3"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
