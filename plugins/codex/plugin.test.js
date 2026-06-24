@@ -1403,14 +1403,26 @@ describe("codex plugin", () => {
       tokens: { access_token: "token" },
       last_refresh: new Date().toISOString(),
     }))
-    ctx.host.http.request.mockReturnValue({
-      status: 200,
-      headers: {},
-      bodyText: JSON.stringify({
-        rate_limit_reset_credits: { available_count: 1 },
-        credits: { balance: 100 },
-      }),
-    })
+    const expiresAt = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString()
+    ctx.host.http.request.mockImplementation((opts) =>
+      opts.url.includes("rate-limit-reset-credits")
+        ? {
+            status: 200,
+            headers: {},
+            bodyText: JSON.stringify({
+              available_count: 1,
+              credits: [{ id: "c1", status: "available", expires_at: expiresAt }],
+            }),
+          }
+        : {
+            status: 200,
+            headers: {},
+            bodyText: JSON.stringify({
+              rate_limit_reset_credits: { available_count: 1 },
+              credits: { balance: 100 },
+            }),
+          }
+    )
     ctx.host.ccusage.query.mockReturnValue({
       status: "ok",
       data: { daily: [] },
@@ -1422,14 +1434,17 @@ describe("codex plugin", () => {
     const creditsIndex = result.lines.findIndex((line) => line.label === "Credits")
     const firstTextIndex = result.lines.findIndex((line) => line.type === "text")
 
-    expect(result.lines[resetIndex]).toEqual({
+    expect(result.lines[resetIndex]).toMatchObject({
       type: "text",
       label: "Rate Limit Resets",
       value: "1 available",
+      color: "#74AA9C",
     })
     expect(resetIndex).toBeGreaterThanOrEqual(0)
     expect(resetIndex).toBe(firstTextIndex)
-    expect(creditsIndex).toBe(resetIndex + 1)
+    // one per-credit detail line now sits between the summary and Credits
+    expect(result.lines.filter((line) => line.label === "Reset credit")).toHaveLength(1)
+    expect(creditsIndex).toBe(resetIndex + 2)
   })
 
   it("shows zero available rate limit resets and omits malformed counts", async () => {

@@ -41,7 +41,7 @@ OpenUsage lives in your system tray and shows how much of your AI coding subscri
 ## Supported providers
 
 - [**Claude**](docs/providers/claude.md) — session, weekly, extra usage, local token usage (ccusage)
-- [**Codex**](docs/providers/codex.md) — session, weekly, reviews, credits
+- [**Codex**](docs/providers/codex.md) — session, weekly, reviews, credits, rate‑limit resets (count + expiry)
 - [**Cursor**](docs/providers/cursor.md) — credits, total / auto / API usage, on‑demand, CLI auth
 - [**Copilot**](docs/providers/copilot.md) — premium, chat, completions
 - [**Z.ai**](docs/providers/zai.md) — session, weekly, web searches

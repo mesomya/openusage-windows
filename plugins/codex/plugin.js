@@ -5,7 +5,15 @@
   const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
   const REFRESH_URL = "https://auth.openai.com/oauth/token"
   const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+  const RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
   const CREDIT_USD_RATE = 0.04
+  // Rate-limit reset credits (Codex-only): brand color for available count,
+  // amber when a credit expires within the soon window, and a cap on how many
+  // individual credit lines we list before collapsing into a "+N more" line.
+  const CODEX_BRAND_COLOR = "#74AA9C"
+  const RESET_SOON_COLOR = "#f59e0b"
+  const RESET_SOON_MS = 72 * 60 * 60 * 1000
+  const MAX_RESET_CREDIT_LINES = 6
   const REFRESH_AGE_MS = 8 * 24 * 60 * 60 * 1000
   const ACCESS_TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000
   const ERR_NOT_LOGGED_IN = "Not logged in. Run `codex` to authenticate."
@@ -321,6 +329,131 @@
       headers,
       timeoutMs: 10000,
     })
+  }
+
+  function fetchResetCredits(ctx, accessToken, accountId) {
+    const headers = {
+      Authorization: "Bearer " + accessToken,
+      Accept: "application/json",
+      "User-Agent": "OpenUsage",
+      // The dedicated endpoint scopes credits to the Codex product surface.
+      "oai-product-sku": "CODEX",
+      originator: "Codex Desktop",
+    }
+    if (accountId) {
+      headers["ChatGPT-Account-Id"] = accountId
+    }
+    return ctx.util.request({
+      method: "GET",
+      url: RESET_CREDITS_URL,
+      headers,
+      timeoutMs: 10000,
+    })
+  }
+
+  function isAvailableResetStatus(status) {
+    return typeof status === "string" && status.trim().toLowerCase() === "available"
+  }
+
+  // Normalize the rate-limit-reset-credits response into
+  // { availableCount, credits: [{ id, expiresMs }] }, available credits only,
+  // sorted soonest-expiry first. API fields are snake_case (status, expires_at).
+  function buildResetCredits(ctx, data) {
+    if (!data || typeof data !== "object") return null
+    const rawList = Array.isArray(data.credits) ? data.credits : []
+    const available = []
+    for (let i = 0; i < rawList.length; i++) {
+      const credit = rawList[i]
+      if (!credit || typeof credit !== "object") continue
+      if (!isAvailableResetStatus(credit.status)) continue
+      const parsedExpiry = credit.expires_at != null ? ctx.util.parseDateMs(credit.expires_at) : null
+      available.push({
+        id: typeof credit.id === "string" ? credit.id : null,
+        expiresMs: typeof parsedExpiry === "number" && Number.isFinite(parsedExpiry) ? parsedExpiry : null,
+      })
+    }
+    available.sort(function (a, b) {
+      if (a.expiresMs === null && b.expiresMs === null) return 0
+      if (a.expiresMs === null) return 1
+      if (b.expiresMs === null) return -1
+      return a.expiresMs - b.expiresMs
+    })
+    let count = readNumber(data.available_count)
+    if (count === null) count = available.length
+    return { availableCount: Math.max(0, Math.floor(count)), credits: available }
+  }
+
+  function resetExpiryFullDate(ctx, ms) {
+    return ctx.fmt.date(ms) + ", " + new Date(Number(ms)).getFullYear()
+  }
+
+  // Codex-only: surfaces how many rate-limit reset credits are available and
+  // when each one expires (credits expire ~30 days after being granted). Pulls
+  // per-credit detail from the dedicated wham/rate-limit-reset-credits endpoint,
+  // and degrades gracefully to the summary count from the usage response if that
+  // request fails.
+  function pushResetCreditLines(lines, ctx, accessToken, accountId, usageResetCount) {
+    // The usage endpoint only reports rate_limit_reset_credits for accounts that
+    // have the feature; if it's absent, show nothing (and skip the extra request).
+    if (usageResetCount === null) return
+
+    // No credits to detail — show the summary line and skip the extra request.
+    if (usageResetCount <= 0) {
+      lines.push(ctx.line.text({ label: "Rate Limit Resets", value: "0 available" }))
+      return
+    }
+
+    let parsed = null
+    try {
+      const resp = fetchResetCredits(ctx, accessToken, accountId)
+      if (resp && resp.status >= 200 && resp.status < 300) {
+        parsed = buildResetCredits(ctx, ctx.util.tryParseJson(resp.bodyText))
+      } else if (resp) {
+        ctx.host.log.warn("reset-credits request returned status " + resp.status)
+      }
+    } catch (e) {
+      ctx.host.log.warn("reset-credits request failed: " + String(e))
+    }
+
+    // Fall back to the summary count from the usage response.
+    if (!parsed) {
+      lines.push(ctx.line.text({
+        label: "Rate Limit Resets",
+        value: Math.floor(usageResetCount) + " available",
+        color: CODEX_BRAND_COLOR,
+      }))
+      return
+    }
+
+    lines.push(ctx.line.text({
+      label: "Rate Limit Resets",
+      value: parsed.availableCount + " available",
+      color: parsed.availableCount > 0 ? CODEX_BRAND_COLOR : undefined,
+    }))
+
+    const nowMs = Date.now()
+    const shown = parsed.credits.slice(0, MAX_RESET_CREDIT_LINES)
+    for (let i = 0; i < shown.length; i++) {
+      const credit = shown[i]
+      if (credit.expiresMs === null) {
+        lines.push(ctx.line.text({ label: "Reset credit", value: "Available" }))
+        continue
+      }
+      const secondsUntil = Math.floor((credit.expiresMs - nowMs) / 1000)
+      const relative = ctx.fmt.resetIn(secondsUntil)
+      const expiringSoon = secondsUntil >= 0 && credit.expiresMs - nowMs <= RESET_SOON_MS
+      lines.push(ctx.line.text({
+        label: "Reset credit",
+        value: relative ? relative + " left" : "Expired",
+        color: relative && expiringSoon ? RESET_SOON_COLOR : undefined,
+        subtitle: "Expires " + resetExpiryFullDate(ctx, credit.expiresMs),
+      }))
+    }
+
+    const overflow = parsed.credits.length - shown.length
+    if (overflow > 0) {
+      lines.push(ctx.line.text({ label: "Reset credits", value: "+" + overflow + " more" }))
+    }
   }
 
   function readPercent(value) {
@@ -827,18 +960,13 @@
         }
       }
 
-      const resetCredits =
+      const usageResetCount =
         data.rate_limit_reset_credits &&
         typeof data.rate_limit_reset_credits === "object" &&
         data.rate_limit_reset_credits.available_count != null
           ? readNumber(data.rate_limit_reset_credits.available_count)
           : null
-      if (resetCredits !== null && resetCredits >= 0) {
-        lines.push(ctx.line.text({
-          label: "Rate Limit Resets",
-          value: Math.floor(resetCredits) + " available",
-        }))
-      }
+      pushResetCreditLines(lines, ctx, auth.tokens.access_token, auth.tokens.account_id, usageResetCount)
 
       const creditsRemaining = readCreditsRemaining(resp, data)
       if (creditsRemaining !== null) {

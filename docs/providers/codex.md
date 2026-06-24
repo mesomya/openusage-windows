@@ -68,7 +68,49 @@ equivalent at `$0.04` per credit. For example, `820.6969075` renders as
 `$32.80 · 820 credits`. The credit balance is unbounded; the API does not provide a maximum.
 
 When available, OpenUsage displays the on-demand reset count as the first detail text metric,
-for example `1 available`.
+for example `1 available`. When the count is greater than zero, it also fetches per-credit
+detail from `/backend-api/wham/rate-limit-reset-credits` (below) to show when each reset credit
+expires — unused credits expire ~30 days after they are granted. If that request fails,
+OpenUsage falls back to showing just the count from this response.
+
+### GET /backend-api/wham/rate-limit-reset-credits
+
+Returns the individual on-demand rate-limit reset credits for the account, including when each
+one expires. Codex-only.
+
+#### Headers
+
+| Header | Required | Value |
+|---|---|---|
+| Authorization | yes | `Bearer <access_token>` |
+| Accept | yes | `application/json` |
+| oai-product-sku | yes | `CODEX` |
+| originator | yes | `Codex Desktop` |
+| ChatGPT-Account-Id | no | `<account_id>` |
+
+#### Response
+
+```jsonc
+{
+  "available_count": 2,                      // optional; OpenUsage counts "available" credits if absent
+  "credits": [
+    {
+      "id": "RateLimitResetCredit_...",
+      "status": "available",                 // only "available" credits are listed
+      "reset_type": "...",
+      "granted_at": "2026-06-12T01:45:00Z",  // optional
+      "expires_at": "2026-07-12T01:45:00Z",  // ISO 8601; expires ~30 days after grant
+      "redeem_started_at": null,
+      "redeemed_at": null
+    }
+  ]
+}
+```
+
+OpenUsage lists each available credit soonest-expiry first, showing the time remaining
+(e.g. `17d 16h left`) with the absolute expiry date as a subtitle. Credits expiring within
+72 hours are highlighted. Up to six credits are listed individually; any beyond that collapse
+into a `+N more` line.
 
 ## Authentication
 
